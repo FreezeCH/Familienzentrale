@@ -177,12 +177,12 @@
   MockBackend.prototype.act = function (action, data) {
     var st = this.state, now = new Date().toISOString(), t = todayIso();
     var find = function (col, id) { return (st[col] || []).filter(function (x) { return x.id === id; })[0]; };
-    var book = function (pid, delta, reason) { st.ledger.push({ id: uid(), person: pid, delta: delta, reason: reason, ts: now }); };
+    var book = function (pid, delta, reason, ref) { var e = { id: uid(), person: pid, delta: delta, reason: reason, ts: now }; if (ref) e.src = ref; st.ledger.push(e); };
     var credit = function (p, pts, name, approval, ref) {
       pts = Number(pts) || 0;
       if (!pts || !p || !p.points_enabled) return;
       if (approval) st.pending.push(Object.assign({ id: uid(), kind: "aufgabe", name: name, person: p.id, points: pts, ts: now }, ref));
-      else book(p.id, pts, name);
+      else book(p.id, pts, name, ref);
     };
     var uncredit = function (pid, pts, name, ref) {
       pts = Number(pts) || 0;
@@ -190,8 +190,13 @@
       if (hi >= 0) st.history.splice(hi, 1);
       var m = st.pending.filter(function (x) { return x.person === pid && Object.keys(ref).every(function (k) { return x[k] === ref[k]; }); })[0];
       if (m) { st.pending = st.pending.filter(function (x) { return x !== m; }); return; }
-      var pp = find("persons", pid);
-      if (pts && pp && pp.points_enabled) book(pid, -pts, "↩︎ " + name);
+      // Nur zurückbuchen, was für genau diesen Haken auch gutgeschrieben wurde
+      for (var li = st.ledger.length - 1; li >= 0; li--) {
+        var le = st.ledger[li], src = le.src || {};
+        if (le.person === pid && le.delta > 0 && !le.undone && Object.keys(ref).every(function (k) { return src[k] === ref[k]; })) {
+          le.undone = true; book(pid, -le.delta, "↩︎ " + name); return;
+        }
+      }
     };
     switch (action) {
       case "check_pin":
@@ -249,7 +254,7 @@
       }
       case "approve": {
         var pe = st.pending.filter(function (x) { return x.id === data.id; })[0];
-        if (pe) { book(pe.person, pe.points, (pe.kind === "belohnung" ? "🎁 " : "") + pe.name); st.pending = st.pending.filter(function (x) { return x.id !== data.id; }); }
+        if (pe) { book(pe.person, pe.points, (pe.kind === "belohnung" ? "🎁 " : "") + pe.name, pe.kind === "aufgabe" ? { ref: pe.ref, step: pe.step, date: pe.date } : null); st.pending = st.pending.filter(function (x) { return x.id !== data.id; }); }
         break;
       }
       case "reject": {

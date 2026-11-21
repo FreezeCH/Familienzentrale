@@ -172,10 +172,11 @@ class FamilienzentraleHub:
                 return item
         return None
 
-    def _book(self, person: str, delta: int, reason: str) -> None:
-        self.data["ledger"].append(
-            {"id": _uid(), "person": person, "delta": int(delta), "reason": reason, "ts": _now_iso()}
-        )
+    def _book(self, person: str, delta: int, reason: str, ref: dict | None = None) -> dict:
+        entry = {"id": _uid(), "person": person, "delta": int(delta), "reason": reason, "ts": _now_iso()}
+        if ref:
+            entry["src"] = dict(ref)
+        self.data["ledger"].append(entry)
         if len(self.data["ledger"]) > MAX_LEDGER:
             # Älteste Buchungen zusammenfassen, damit der Stand stimmt
             old = self.data["ledger"][:-MAX_LEDGER]
@@ -185,6 +186,7 @@ class FamilienzentraleHub:
                 sums[l["person"]] = sums.get(l["person"], 0) + int(l["delta"])
             for pid, s in sums.items():
                 self.data["ledger"].insert(0, {"id": _uid(), "person": pid, "delta": s, "reason": "Übertrag", "ts": old[-1]["ts"]})
+        return entry
 
     def _history(self, kind: str, name: str, person: str | None) -> None:
         self.data["history"].insert(0, {"id": _uid(), "kind": kind, "name": name, "person": person, "ts": _now_iso()})
@@ -196,7 +198,7 @@ class FamilienzentraleHub:
         if approval:
             self.data["pending"].append({"id": _uid(), "kind": "aufgabe", "name": name, "person": person["id"], "points": pts, "ts": _now_iso(), **ref})
         else:
-            self._book(person["id"], pts, name)
+            self._book(person["id"], pts, name, ref)
 
     def _uncredit(self, pid: str | None, pts: int, name: str, ref: dict) -> None:
         if not pid:
@@ -210,9 +212,13 @@ class FamilienzentraleHub:
         if match:
             self.data["pending"] = [x for x in self.data["pending"] if x is not match[0]]
             return
-        p = self._find("persons", pid)
-        if pts and p and p.get("points_enabled"):
-            self._book(pid, -pts, "↩︎ " + name)
+        # Nur zurückbuchen, was für genau diesen Haken auch gutgeschrieben wurde
+        for entry in reversed(self.data["ledger"]):
+            src = entry.get("src") or {}
+            if entry.get("person") == pid and entry.get("delta", 0) > 0 and not entry.get("undone") and all(src.get(k) == v for k, v in ref.items()):
+                entry["undone"] = True
+                self._book(pid, -int(entry["delta"]), "↩︎ " + name)
+                return
 
     # ---------- PIN ----------
     @property
@@ -471,7 +477,8 @@ class FamilienzentraleHub:
         elif action == "approve":
             pe = next((x for x in d["pending"] if x.get("id") == data.get("id")), None)
             if pe:
-                self._book(pe["person"], int(pe["points"]), ("🎁 " if pe["kind"] == "belohnung" else "") + str(pe.get("name")))
+                ref = {k: pe[k] for k in ("ref", "step", "date") if k in pe} if pe["kind"] == "aufgabe" else None
+                self._book(pe["person"], int(pe["points"]), ("🎁 " if pe["kind"] == "belohnung" else "") + str(pe.get("name")), ref)
                 d["pending"] = [x for x in d["pending"] if x is not pe]
                 if pe["kind"] == "belohnung":
                     p = self._find("persons", pe["person"])

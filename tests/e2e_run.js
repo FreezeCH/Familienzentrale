@@ -126,6 +126,21 @@ export async function run() {
   check("Rückgängig zieht Punkte ab", d.data.ledger.filter((l) => l.person === A).reduce((s, l) => s + l.delta, 0) === 5);
   check("Rückgängig entfernt Verlaufseintrag", d.data.history.length === hBefore - 1, [hBefore, d.data.history.length]);
 
+  // 5b Punkte-Sicherheit: Rücknahme bucht nur echte Gutschriften zurück
+  const saldo = async (pid) => (await dbg()).data.ledger.filter((l) => l.person === pid).reduce((s, l) => s + l.delta, 0);
+  const sB0 = await saldo(B);
+  const tileB = `[data-act=rstep][data-r='${r1.id}'][data-p='${B}'][data-s='${r1.steps[0].id}']`;
+  await click(tileB); await click(tileB);
+  check("Abhaken + Zurücknehmen vor Bestätigung: Stand unverändert", (await saldo(B)) === sB0 && (await dbg()).data.pending.length === 0);
+  await click(tileB); await nav("punkte"); await click("[data-act=approve]"); await pinIf();
+  check("Nach Bestätigung +2", (await saldo(B)) === sB0 + 2);
+  await nav("aufgaben"); await click(tileB);
+  check("Zurücknehmen nach Bestätigung: wieder Ausgangsstand", (await saldo(B)) === sB0);
+  await click(tileB); await nav("punkte"); await click("[data-act=reject]"); await pinIf();
+  await nav("aufgaben");
+  check("Nach Ablehnen nicht abgehakt", !q(tileB).classList.contains("done"));
+  check("Nie negativer Stand durch Ablehnen/Zurücknehmen", (await saldo(B)) === sB0);
+
   // 6 Aufgaben: jeder / gemeinsam / reihum
   const mkT = async (name, persons, mode, points) => { await click("[data-act=edit][data-col=tasks]:not([data-id])"); await pinIf(); set("name", name); qa(".dlg [data-t=persons]").forEach((c) => (c.checked = persons.includes(c.value))); set("mode", mode); set("points", points); await save(); };
   await mkT("Zimmer lüften", [A, B], "jeder", 1);

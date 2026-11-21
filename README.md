@@ -14,7 +14,7 @@ Ein Familienplaner als eigenes Panel in Home Assistant, für das Wand-Tablet und
 Alles wird in der Oberfläche eingestellt. Es gibt kein YAML.
 
 ## Status
-In Entwicklung (Version 0.3.1).
+In Entwicklung (Version 0.3.2).
 
 | Teil | Stand |
 |---|---|
