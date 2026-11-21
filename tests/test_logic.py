@@ -96,6 +96,14 @@ def test_waste():
     assert logic.waste_dates(w, 3, D) == [date(2026, 11, 24), date(2026, 12, 9), date(2026, 12, 22)]
 
 
+def test_waste_anchor():
+    # Start an einem Sonntag, Abfuhr dienstags alle 2 Wochen -> erster Termin ist der Dienstag danach
+    w = {"rule": {"type": "weekly", "weekday": 1, "every_weeks": 2, "start": "2026-11-22"}}
+    assert logic.waste_dates(w, 2, D) == [date(2026, 11, 24), date(2026, 12, 8)]
+    w = {"rule": {"type": "weekly", "weekday": 1, "every_weeks": 1}}
+    assert logic.waste_dates(w, 1, D) == [date(2026, 11, 24)]
+
+
 def test_maint():
     assert logic.maint_status({"next": "2026-11-20"}, D) == "ueberfaellig"
     assert logic.maint_status({"next": "2026-11-25", "warn_days": 7}, D) == "bald"

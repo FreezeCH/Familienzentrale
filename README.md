@@ -14,7 +14,7 @@ Ein Familienplaner als eigenes Panel in Home Assistant, für das Wand-Tablet und
 Alles wird in der Oberfläche eingestellt. Es gibt kein YAML.
 
 ## Status
-In Entwicklung (Version 0.3.0).
+In Entwicklung (Version 0.3.1).
 
 | Teil | Stand |
 |---|---|
@@ -45,3 +45,8 @@ In Entwicklung (Version 0.3.0).
 ## Voraussetzungen (optional)
 - **Mealie:** die offizielle Integration [Mealie](https://www.home-assistant.io/integrations/mealie/)
 - **Bring:** die offizielle Integration [Bring!](https://www.home-assistant.io/integrations/bring/)
+
+## Tests
+- `python tests/test_logic.py`: Fachlogik (Fälligkeit, Routinen, Punkte, Müll, Datenübernahme)
+- `python tests/dev_server.py`: echtes Backend mit einer kleinen Home-Assistant-Attrappe, Panel unter `http://127.0.0.1:8770/tests/e2e.html`
+  - Kompletter Klicktest in der Browser-Konsole: `await (await import('/tests/e2e_run.js')).run()`

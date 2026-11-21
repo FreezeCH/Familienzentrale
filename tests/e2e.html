@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Familienzentrale – Testumgebung</title>
+<style>html, body { margin: 0; height: 100%; } familienzentrale-panel { display: block; height: 100%; }</style>
+</head>
+<body>
+<!-- Panel mit echtem Backend (tests/dev_server.py) statt Demodaten -->
+<script src="../custom_components/familienzentrale/frontend/familienzentrale-panel.js"></script>
+<script>
+  var fakeHass = {
+    states: {},
+    callWS: function (msg) {
+      return fetch("/api/ws", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(msg) })
+        .then(function (r) { return r.json(); })
+        .then(function (r) { if (!r.ok) throw { code: r.code, message: r.message }; return r.result; });
+    },
+    connection: { subscribeMessage: function () { return Promise.reject(new Error("kein Abo im Test")); } }
+  };
+  var el = document.createElement("familienzentrale-panel");
+  el.hass = fakeHass;
+  document.body.appendChild(el);
+</script>
+</body>
+</html>

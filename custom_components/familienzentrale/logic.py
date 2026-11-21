@@ -210,14 +210,16 @@ def waste_dates(waste: dict, count: int, from_day: date) -> list[date]:
     skip = {parse(s) for s in waste.get("skip_dates") or []}
     if rule.get("type") == "weekly" and rule.get("weekday") is not None:
         every = int(rule.get("every_weeks") or 1) or 1
-        start = week_start(parse(rule.get("start")) or from_day)
         wday = int(rule["weekday"])
+        # Rhythmus beginnt beim ersten passenden Wochentag am oder nach dem Startdatum
+        st0 = parse(rule.get("start")) or from_day
+        anchor = st0 + timedelta(days=(wday - st0.weekday()) % 7)
         for i in range(400):
             d = from_day + timedelta(days=i)
             if d.weekday() != wday or d in skip:
                 continue
-            weeks = (week_start(d) - start).days // 7
-            if weeks >= 0 and weeks % every == 0:
+            days = (d - anchor).days
+            if days >= 0 and (days // 7) % every == 0:
                 out.append(d)
                 if len(out) >= count + 5:
                     break

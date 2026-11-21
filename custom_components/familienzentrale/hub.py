@@ -88,6 +88,7 @@ PROTECTED = {"approve", "reject", "adjust_points", "save_item", "delete_item"}
 FREE_SETTINGS = {"theme"}
 
 MAX_HISTORY = 200
+PERSON_TAG = "[fz:"
 MAX_LEDGER = 2000
 
 
@@ -200,6 +201,11 @@ class FamilienzentraleHub:
     def _uncredit(self, pid: str | None, pts: int, name: str, ref: dict) -> None:
         if not pid:
             return
+        today = self.today().isoformat()
+        for i, h in enumerate(self.data["history"]):
+            if h.get("person") == pid and h.get("name") == name and str(h.get("ts", ""))[:10] == today:
+                del self.data["history"][i]
+                break
         match = [x for x in self.data["pending"] if x.get("person") == pid and all(x.get(k) == v for k, v in ref.items())]
         if match:
             self.data["pending"] = [x for x in self.data["pending"] if x is not match[0]]
@@ -294,12 +300,18 @@ class FamilienzentraleHub:
                 continue
             for ev in items:
                 allday = not isinstance(ev.start, datetime)
+                who = person
+                desc = getattr(ev, "description", None) or ""
+                if PERSON_TAG in desc:
+                    tagged = desc.split(PERSON_TAG, 1)[1].split("]", 1)[0].strip()
+                    if self._find("persons", tagged):
+                        who = tagged
                 events.append(
                     {
                         "id": f"{entity_id}|{ev.uid or ''}|{ev.start}",
                         "calendar": entity_id,
                         "uid": ev.uid,
-                        "person": person,
+                        "person": who,
                         "title": ev.summary,
                         "location": ev.location,
                         "allday": allday,
@@ -316,10 +328,15 @@ class FamilienzentraleHub:
         if person:
             p = self._find("persons", person)
             target = p.get("calendar") if p else None
+        tag_person = person if (person and not target) else None
         target = target or self.data["settings"].get("family_calendar")
         if not target:
             raise HomeAssistantError("Kein Kalender gewählt (Einstellungen → Kalender)")
         data: dict[str, Any] = {"summary": d.get("title") or "Termin"}
+        if tag_person:
+            # Person ohne eigenen Kalender: Termin im Familienkalender, Person in der Beschreibung merken
+            p = self._find("persons", tag_person)
+            data["description"] = f"Für {p.get('name') if p else ''} {PERSON_TAG}{tag_person}]"
         if d.get("allday"):
             data["start_date"] = str(d["start"])[:10]
             data["end_date"] = str(d["end"])[:10]
@@ -461,7 +478,20 @@ class FamilienzentraleHub:
                     self.hass.bus.async_fire(EVENT_REWARD_REDEEMED, {"reward": pe.get("name"), "person": p.get("name") if p else None})
 
         elif action == "reject":
-            d["pending"] = [x for x in d["pending"] if x.get("id") != data.get("id")]
+            pe = next((x for x in d["pending"] if x.get("id") == data.get("id")), None)
+            d["pending"] = [x for x in d["pending"] if x is not pe]
+            if pe and pe.get("kind") == "aufgabe" and pe.get("date") == t:
+                if pe.get("step"):
+                    r = self._find("routines", pe.get("ref"))
+                    rec = (r or {}).get("done", {}).get(pe["person"])
+                    if rec and rec.get("date") == t:
+                        rec["steps"] = [x for x in rec.get("steps", []) if x != pe["step"]]
+                else:
+                    task = self._find("tasks", pe.get("ref"))
+                    if task:
+                        task.setdefault("done", {}).pop(logic.task_key(task, pe["person"]), None)
+                        if logic.task_mode(task) == "reihum":
+                            task["rotate_index"] = max(0, int(task.get("rotate_index") or 0) - 1)
 
         elif action == "adjust_points":
             if not self._find("persons", data.get("person")):
@@ -522,7 +552,7 @@ class FamilienzentraleHub:
             await self._async_delete_event(str(data.get("id", "")))
 
         elif action == "shopping_add":
-            await self._async_shopping_add([str(data.get("summary", ""))])
+            result["added"] = await self._async_shopping_add([str(data.get("summary", ""))])
 
         elif action == "shopping_done":
             target = self._shopping_list()

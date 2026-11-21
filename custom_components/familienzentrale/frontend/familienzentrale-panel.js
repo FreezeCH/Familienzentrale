@@ -130,9 +130,10 @@
         if (skip.indexOf(s) >= 0) continue;
         if (r.type === "weekly" && wd(d) === Number(r.weekday)) {
           var every = Number(r.every_weeks) || 1;
-          var start = r.start ? weekStart(parse(r.start)) : weekStart(from);
-          var weeks = Math.round((weekStart(d) - start) / (7 * 86400000));
-          if (weeks >= 0 && weeks % every === 0) out.push(s);
+          var st0 = r.start ? parse(r.start) : from;
+          var anchor = addDays(st0, (Number(r.weekday) - wd(st0) + 7) % 7);
+          var days = Math.round((d - anchor) / 86400000);
+          if (days >= 0 && Math.round(days / 7) % every === 0) out.push(s);
         }
       }
       (w.extra_dates || []).forEach(function (s) { if (s >= iso(from)) out.push(s); });
@@ -185,6 +186,8 @@
     };
     var uncredit = function (pid, pts, name, ref) {
       pts = Number(pts) || 0;
+      var hi = st.history.findIndex(function (h) { return h.person === pid && h.name === name && String(h.ts).slice(0, 10) === t; });
+      if (hi >= 0) st.history.splice(hi, 1);
       var m = st.pending.filter(function (x) { return x.person === pid && Object.keys(ref).every(function (k) { return x[k] === ref[k]; }); })[0];
       if (m) { st.pending = st.pending.filter(function (x) { return x !== m; }); return; }
       var pp = find("persons", pid);
@@ -249,9 +252,20 @@
         if (pe) { book(pe.person, pe.points, (pe.kind === "belohnung" ? "🎁 " : "") + pe.name); st.pending = st.pending.filter(function (x) { return x.id !== data.id; }); }
         break;
       }
-      case "reject":
+      case "reject": {
+        var rj = st.pending.filter(function (x) { return x.id === data.id; })[0];
         st.pending = st.pending.filter(function (x) { return x.id !== data.id; });
+        if (rj && rj.kind === "aufgabe" && rj.date === t) {
+          if (rj.step) {
+            var rr = find("routines", rj.ref);
+            if (rr && rr.done && rr.done[rj.person] && rr.done[rj.person].date === t) rr.done[rj.person].steps = rr.done[rj.person].steps.filter(function (x) { return x !== rj.step; });
+          } else {
+            var tt = find("tasks", rj.ref);
+            if (tt && tt.done) { delete tt.done[Logic.taskKey(tt, rj.person)]; if (Logic.taskMode(tt) === "reihum") tt.rotate_index = Math.max(0, (tt.rotate_index || 0) - 1); }
+          }
+        }
         break;
+      }
       case "adjust_points":
         book(data.person, Number(data.delta) || 0, data.reason || "Korrektur");
         break;
@@ -281,8 +295,7 @@
       case "send_to_bring":
         return Promise.resolve({ added: addToBring(st, data.items || []) }).then(this._done.bind(this));
       case "shopping_add":
-        st.shopping.push({ uid: uid(), summary: data.summary, status: "needs_action" });
-        break;
+        return Promise.resolve({ added: addToBring(st, [data.summary]) }).then(this._done.bind(this));
       case "shopping_done":
         st.shopping = st.shopping.filter(function (x) { return x.uid !== data.uid; });
         break;
@@ -582,6 +595,7 @@ label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--mu
         this._boot = true;
         this.shadowRoot.addEventListener("click", (e) => this._onClick(e));
         this.shadowRoot.addEventListener("change", (e) => this._onChange(e));
+        this.shadowRoot.addEventListener("keydown", (e) => { if (e.key === "Enter" && e.target && e.target.id === "shopin") { e.preventDefault(); this._shopAdd(); } });
         ["pointerdown", "keydown", "touchstart"].forEach((ev) => this.shadowRoot.addEventListener(ev, () => this._resetIdle(), { passive: true }));
         this._clock = setInterval(() => { var c = this.shadowRoot.querySelector(".clock"); if (c) c.textContent = this._time(); }, 15000);
       }
@@ -623,11 +637,20 @@ label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--mu
     }
     act(action, data) {
       data = Object.assign({}, data || {});
+      var isRetry = data._retry; delete data._retry;
       if (this._pinToken && Date.now() < this.unlockedUntil) data._pin = this._pinToken;
       return this.backend.act(action, data).then((r) => {
         if (!this.backend.onChange && !this._unsub) return this.backend.load().then((s) => { this.state = s; this.render(); return r; });
         return r;
-      }).catch((e) => { this.toast("⚠️ " + (e && e.message || e)); throw e; });
+      }).catch((e) => {
+        var msg = String(e && e.message || e);
+        if (msg.indexOf("Eltern-PIN") >= 0 && !isRetry) {
+          this.unlockedUntil = 0; this._pinToken = null;
+          var retry = Object.assign({}, data, { _retry: true }); delete retry._pin;
+          return new Promise((res, rej) => this.pin(() => this.act(action, retry).then(res, rej), () => rej(e)));
+        }
+        this.toast("⚠️ " + msg); throw e;
+      });
     }
 
     // ---------- Darstellung ----------
@@ -675,7 +698,7 @@ label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--mu
           bodyHtml += open.slice(0, 4).map((x) => this._taskRow(x, p.id)).join("");
           if (open.length > 4) bodyHtml += "<div class='small muted'>+ " + (open.length - 4) + " weitere</div>";
         }
-        return "<div class='pcol'><div class='ph' style='background:" + esc(p.color) + ";color:" + textOn(p.color) + "'>" + this.av(p) + "<span class='pname'>" + esc(p.name) + "</span>" + (p.points_enabled && st.settings.modules.punkte !== false ? "<span class='pts'>⭐ " + Logic.points(st, p.id) + "</span>" : "") + "</div><div class='pb'>" + bodyHtml + "</div></div>";
+        return "<div class='pcol'><div class='ph' style='background:" + esc(p.color) + ";color:" + textOn(p.color) + "'>" + this.av(p) + "<span class='pname'>" + esc(p.name) + "</span>" + (p.points_enabled && st.settings.modules.punkte !== false ? "<span class='pts'>⭐ " + Logic.points(st, p.id) + (Logic.available(st, p.id) !== Logic.points(st, p.id) ? " <small>(" + Logic.available(st, p.id) + " frei)</small>" : "") + "</span>" : "") + "</div><div class='pb'>" + bodyHtml + "</div></div>";
       }).join("");
       var allEv = this._eventsOn(t).filter((e) => !e.person || !this.person(e.person));
       var common = allEv.length ? "<div class='card' style='margin-bottom:14px'><h3>👪 Alle</h3><div class='list'>" + allEv.map((e) => "<div class='ev'><span class='bar' style='background:var(--accent)'></span><span class='t'>" + this._evTime(e) + "</span><span>" + esc(e.title) + "</span></div>").join("") + "</div></div>" : "";
@@ -812,7 +835,7 @@ label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--mu
         html += "<div class='card' style='margin-bottom:14px;border:2px solid var(--warn)'><h3>🔔 Wartet auf Bestätigung</h3><div class='list'>" + st.pending.map((x) => { var p = this.person(x.person); return "<div class='task'>" + this.av(p, "s") + "<span class='nm'><b>" + esc(p ? p.name : "?") + "</b> · " + esc(x.name) + " <span class='muted'>(" + (x.points > 0 ? "+" : "") + x.points + " ⭐)</span></span><button class='btn ok sm' data-act='approve' data-id='" + x.id + "'>✓ Bestätigen</button><button class='btn sec sm' data-act='reject' data-id='" + x.id + "'>✕</button></div>"; }).join("") + "</div></div>";
       }
       if (!kids.length) return html + "<div class='card empty'>Bei keiner Person sind Punkte eingeschaltet. Das geht unter ⚙️ Einstellungen → Personen.</div>";
-      html += "<div class='people'>" + kids.map((p) => "<button class='pcol' data-act='pp' data-v='" + p.id + "' style='border:" + (p.id === sel ? "3px solid " + esc(p.color) : "1px solid var(--line)") + ";text-align:left;padding:0'><div class='ph' style='background:" + esc(p.color) + ";color:" + textOn(p.color) + "'>" + this.av(p) + "<span class='pname'>" + esc(p.name) + "</span><span class='pts' style='font-size:22px'>⭐ " + Logic.points(st, p.id) + "</span></div></button>").join("") + "</div>";
+      html += "<div class='people'>" + kids.map((p) => "<button class='pcol' data-act='pp' data-v='" + p.id + "' style='border:" + (p.id === sel ? "3px solid " + esc(p.color) : "1px solid var(--line)") + ";text-align:left;padding:0'><div class='ph' style='background:" + esc(p.color) + ";color:" + textOn(p.color) + "'>" + this.av(p) + "<span class='pname'>" + esc(p.name) + "</span><span class='pts' style='font-size:22px'>⭐ " + Logic.points(st, p.id) + (Logic.available(st, p.id) !== Logic.points(st, p.id) ? " <small>(" + Logic.available(st, p.id) + " frei)</small>" : "") + "</span></div></button>").join("") + "</div>";
       var pts = Logic.available(st, sel), sp = this.person(sel);
       html += "<div class='card' style='margin-bottom:14px'><h3>🎁 Belohnungen für " + esc(sp.name) + "</h3><div class='shop'>" + (st.rewards.map((r) => "<div class='rew'><span class='ic'>" + esc(r.icon || "🎁") + "</span><b>" + esc(r.name) + "</b><span class='muted'>⭐ " + r.cost + "</span><button class='btn sm' " + (pts < r.cost ? "disabled style='opacity:.4'" : "") + " data-act='redeem' data-id='" + r.id + "' data-p='" + sel + "'>Einlösen</button><button class='btn sec sm' data-act='edit' data-col='rewards' data-id='" + r.id + "'>✏️</button></div>").join("") || "<div class='empty'>Noch keine Belohnungen</div>") + "</div></div>";
       var led = st.ledger.filter((l) => l.person === sel).slice().reverse().slice(0, 20);
@@ -865,7 +888,7 @@ label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--mu
         (st.waste.map((w) => {
           var ds = Logic.wasteDates(w, 4);
           var r = w.rule || {};
-          return "<div class='card' style='border-left:8px solid " + esc(w.color) + "'><div class='row'><span style='font-size:30px'>" + esc(w.icon) + "</span><b style='font-size:18px'>" + esc(w.name) + "</b><span style='flex:1'></span><button class='btn sec sm' data-act='edit' data-col='waste' data-id='" + w.id + "'>✏️</button></div><div class='small muted' style='margin:6px 0'>" + (r.type === "weekly" ? (r.every_weeks > 1 ? "alle " + r.every_weeks + " Wochen" : "jede Woche") + " am " + WD_LANG[r.weekday] : "nur einzelne Daten") + "</div><div class='list'>" + (ds.map((d) => "<div class='row'><span>" + this._relDay(d) + "</span><span class='muted small' style='margin-left:auto'>" + fmtDate(d) + "</span></div>").join("") || "<div class='empty'>Keine Termine</div>") + "</div></div>";
+          return "<div class='card' style='border-left:8px solid " + esc(w.color) + "'><div class='row'><span style='font-size:30px'>" + esc(w.icon) + "</span><b style='font-size:18px'>" + esc(w.name) + "</b><span style='flex:1'></span><button class='btn sec sm' data-act='edit' data-col='waste' data-id='" + w.id + "'>✏️</button></div><div class='small muted' style='margin:6px 0'>" + (r.type === "weekly" ? (r.every_weeks > 1 ? "alle " + r.every_weeks + " Wochen" : "jede Woche") + " am " + WD_LANG[r.weekday] : "nur einzelne Daten") + "</div><div class='list'>" + (ds.map((d) => { var n = daysBetween(todayIso(), d); return "<div class='row'><span>" + fmtDate(d) + "</span><span class='muted small' style='margin-left:auto'>" + (n === 0 ? "heute" : n === 1 ? "morgen" : "in " + n + " Tagen") + "</span></div>"; }).join("") || "<div class='empty'>Keine Termine</div>") + "</div></div>";
         }).join("") || "<div class='card empty'>Noch keine Müllarten erfasst</div>") + "</div>";
     }
 
@@ -929,7 +952,7 @@ label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--mu
         case "event": this._eventDlg(id); break;
         case "meal": this._mealDlg(el.getAttribute("data-d"), el.getAttribute("data-s")); break;
         case "weekbring": this._weekBring(v); break;
-        case "shopadd": { var inp = this.shadowRoot.getElementById("shopin"); if (inp && inp.value.trim()) this.act("shopping_add", { summary: inp.value.trim() }); break; }
+        case "shopadd": this._shopAdd(); break;
         case "shopdone": this._keepScroll = true; this.act("shopping_done", { uid: id }); break;
         case "maintdone": this._who("Wer hat's gemacht?", null, (pid) => this.act("maint_done", { id: id, person: pid }).then(() => this.lob(pid))); break;
         case "unlock": this.pin(() => this.render()); break;
@@ -939,6 +962,16 @@ label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--mu
         case "theme": this._keepScroll = true; this.act("save_settings", { theme: st.settings.theme === "dunkel" ? "hell" : "dunkel" }); break;
         case "demoreset": if (confirm("Alle Demodaten zurücksetzen?")) { this.backend.reset(); this.useDemo(window.FAMILIENZENTRALE_DEMO); } break;
       }
+    }
+    _shopAdd() {
+      var inp = this.shadowRoot.getElementById("shopin");
+      var v = inp ? inp.value.trim() : "";
+      if (!v) return;
+      this._keepScroll = true;
+      this.act("shopping_add", { summary: v }).then((r) => {
+        if (r && r.added === 0) this.toast("„" + v + "“ steht schon auf der Liste");
+        var i2 = this.shadowRoot.getElementById("shopin"); if (i2) i2.focus();
+      });
     }
     _onChange(e) {
       var el = e.target, c = el.getAttribute("data-chg");
@@ -1053,6 +1086,7 @@ label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--mu
       var html = "<div class='form'>" + fields.map((f) => {
         var v = get(state, f.k);
         var name = "data-k='" + f.k + "'";
+        if (f.t === "pin") return "<label class='f'>" + esc(f.l) + "<input type='password' inputmode='numeric' pattern='[0-9]*' maxlength='4' autocomplete='off' " + name + "></label>";
         if (f.t === "text" || f.t === "number" || f.t === "date") return "<label class='f'>" + esc(f.l) + "<input type='" + f.t + "' " + name + " value='" + esc(v == null ? "" : v) + "'></label>";
         if (f.t === "textarea") return "<label class='f'>" + esc(f.l) + "<textarea " + name + " rows='2'>" + esc(v || "") + "</textarea></label>";
         if (f.t === "color") return "<label class='f'>" + esc(f.l) + "<input type='color' " + name + " value='" + esc(v || "#888888") + "'></label>";
@@ -1074,7 +1108,7 @@ label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--mu
         return "";
       }).join("") + "</div>";
       var btns = [["Abbrechen", "sec"]];
-      if (onDelete) btns.unshift(["🗑️ Löschen", "bad", onDelete]);
+      if (onDelete) btns.unshift(["🗑️ Löschen", "bad", () => { onDelete(); return false; }]);
       var dlg;
       btns.push(["Speichern", "", () => {
         dlg.querySelectorAll("[data-k]").forEach((inp) => {
@@ -1184,7 +1218,7 @@ label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--mu
       if (!e) return;
       var p = this.person(e.person);
       this.dialog(esc(e.title), "<p>" + (p ? this.av(p, "s") + " " + esc(p.name) + "<br>" : "") + fmtDate(e.start) + " · " + this._evTime(e) + (e.location ? "<br>📍 " + esc(e.location) : "") + "</p>",
-        [["🗑️ Löschen", "bad", () => (this.state.settings.lock_calendar ? this.pin.bind(this) : (f) => f())(() => this.act("delete_event", { id: id }))], ["Schliessen", "sec"]]);
+        [["🗑️ Löschen", "bad", () => { this.closeDialog(); (this.state.settings.lock_calendar ? this.pin.bind(this) : (f) => f())(() => this.act("delete_event", { id: id }).then(() => this.toast("🗑️ Termin gelöscht"))); return false; }], ["Schliessen", "sec"]]);
     }
 
     _mealDlg(date, slot) {
@@ -1254,10 +1288,10 @@ label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--mu
       dlg.querySelector(".who").addEventListener("click", (e) => { var b = e.target.closest("[data-pid]"); if (!b) return; this.closeDialog(); cb(b.getAttribute("data-pid")); });
     }
     _unlocked() { return !this.state.settings.pin_set || Date.now() < this.unlockedUntil; }
-    pin(cb) {
+    pin(cb, onCancel) {
       if (this._unlocked()) return cb();
       var val = "";
-      var dlg = this.dialog("🔒 Eltern-PIN", "<div class='pindots'>" + [0, 1, 2, 3].map(() => "<i></i>").join("") + "</div><div class='pinpad'>" + [1, 2, 3, 4, 5, 6, 7, 8, 9, "", 0, "⌫"].map((n) => n === "" ? "<span></span>" : "<button data-n='" + n + "'>" + n + "</button>").join("") + "</div>", [["Abbrechen", "sec"]]);
+      var dlg = this.dialog("🔒 Eltern-PIN", "<div class='pindots'>" + [0, 1, 2, 3].map(() => "<i></i>").join("") + "</div><div class='pinpad'>" + [1, 2, 3, 4, 5, 6, 7, 8, 9, "", 0, "⌫"].map((n) => n === "" ? "<span></span>" : "<button data-n='" + n + "'>" + n + "</button>").join("") + "</div>", [["Abbrechen", "sec", () => { if (onCancel) onCancel(); }]]);
       var dots = dlg.querySelectorAll(".pindots i");
       dlg.querySelector(".pinpad").addEventListener("click", (e) => {
         var b = e.target.closest("[data-n]"); if (!b) return;
@@ -1273,10 +1307,12 @@ label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--mu
       });
     }
     _newPin() {
-      this.form("🔑 Neue Eltern-PIN", [{ k: "a", l: "Neue PIN (4 Ziffern)", t: "number" }, { k: "b", l: "Wiederholen", t: "number" }], {}, (v) => {
-        var a = String(v.a == null ? "" : v.a), b = String(v.b == null ? "" : v.b);
+      this.form("🔑 Neue Eltern-PIN", [{ k: "a", l: "Neue PIN (4 Ziffern)", t: "pin" }, { k: "b", l: "Wiederholen", t: "pin" }], {}, (v) => {
+        var a = String(v.a == null ? "" : v.a).trim(), b = String(v.b == null ? "" : v.b).trim();
         if (!/^\d{4}$/.test(a) || a !== b) { this.toast("PINs stimmen nicht überein oder sind nicht 4-stellig"); return Promise.reject(new Error("pin")); }
-        return this.act("save_settings", { new_pin: a }).then(() => this.toast("✓ PIN geändert"));
+        return this.act("save_settings", { new_pin: a })
+          .then(() => this.backend.act("check_pin", { pin: a }))
+          .then((r) => { if (r && r.ok) { this._pinToken = r.token || null; this.unlockedUntil = Date.now() + 5 * 60000 - 5000; } this.render(); this.toast("✓ PIN gespeichert"); });
       });
     }
 
