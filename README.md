@@ -14,7 +14,27 @@ Ein Familienplaner als eigenes Panel in Home Assistant, für das Wand-Tablet und
 Alles wird in der Oberfläche eingestellt. Es gibt kein YAML.
 
 ## Status
-In Entwicklung. Das Panel läuft bereits als Vorschau mit Demodaten. Das Backend (Etappe 1) folgt.
+In Entwicklung (Version 0.2.0).
+
+| Teil | Stand |
+|---|---|
+| Personen, Einstellungen, Eltern-PIN | fertig |
+| Kalender (HA-Kalender lesen, Termine anlegen und löschen) | fertig |
+| Aufgaben, Routinen, Punkte, Belohnungen, Verlauf | fertig |
+| Wartung, Müll (Anzeige und Erfassung) | fertig |
+| Einkauf über eine To-do-Liste (z. B. Bring) | fertig |
+| Essensplan mit Mealie (Rezeptsuche, Plan, Zutaten) | folgt |
+| Erinnerungen über Telegram und Sonos | folgt |
+| Bilderrahmen | folgt |
+
+### Entitäten
+- `sensor.familienzentrale_punkte_<person>` (Attribut `verfuegbar`)
+- `sensor.familienzentrale_offene_aufgaben_<person>`
+- `sensor.familienzentrale_nachste_mullabfuhr` (Datum, Attribut `arten`)
+- `sensor.familienzentrale_fallige_wartungen`
+
+### Ereignisse
+`familienzentrale_aufgabe_erledigt`, `familienzentrale_belohnung_eingeloest` und `familienzentrale_wartung_erledigt` lassen sich in eigenen Automationen verwenden.
 
 ## Installation (HACS)
 1. In HACS das Menü **⋮ → Benutzerdefinierte Repositories** öffnen und dieses Repository als Typ *Integration* hinzufügen.

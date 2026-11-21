@@ -1,0 +1,13 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Familienzentrale",
+        "description": "Sets up the Familienzentrale. Add people, chores, calendars and everything else afterwards in the 'Familienzentrale' panel in the sidebar."
+      }
+    },
+    "abort": {
+      "single_instance_allowed": "Familienzentrale is already set up."
+    }
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Familienzentrale",
+        "description": "Richtet die Familienzentrale ein. Personen, Aufgaben, Kalender und alles Weitere stellst du danach im Panel „Familienzentrale“ in der Seitenleiste ein."
+      }
+    },
+    "abort": {
+      "single_instance_allowed": "Die Familienzentrale ist bereits eingerichtet."
+    }
+  }
+}

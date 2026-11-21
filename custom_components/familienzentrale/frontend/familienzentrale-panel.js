@@ -129,7 +129,7 @@
   };
 
   function MockBackend(seed) {
-    this.key = "familienzentrale_demo_v2";
+    this.key = "familienzentrale_demo_v3";
     var saved = null;
     try { saved = JSON.parse(localStorage.getItem(this.key) || "null"); } catch (e) { saved = null; }
     this.state = saved || JSON.parse(JSON.stringify(seed || DEMO_SEED()));
@@ -345,6 +345,8 @@
         { slug: "rosti", name: "Rösti mit Spiegelei", ingredients: ["Kartoffeln", "Eier", "Butter"] },
         { slug: "birchermuesli", name: "Birchermüesli", ingredients: ["Haferflocken", "Joghurt", "Äpfel", "Milch"] }
       ],
+      calendar_list: [{ entity_id: "calendar.familie", name: "Familie" }],
+      ha_persons: [],
       todo_lists: [
         { entity_id: "todo.einkauf", name: "Einkauf (Bring)", platform: "bring" },
         { entity_id: "todo.shopping_list", name: "Einkaufsliste (HA)", platform: "shopping_list" }
@@ -508,7 +510,7 @@ label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--mu
       if (first && !this.backend) { this.backend = new HassBackend(() => this._hass); this._start(); }
     }
     get hass() { return this._hass; }
-    set narrow(v) { this._narrow = v; }
+    set narrow(v) { var ch = this._narrow !== v; this._narrow = v; if (ch && this.state) this.render(); }
     set panel(p) { this._panel = p; }
     useDemo(seed) { this.backend = new MockBackend(seed); this.backend.onChange = (s) => { this.state = s; this.render(); }; this._start(); }
 
@@ -548,9 +550,6 @@ label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--mu
     person(id) { return (this.state.persons || []).filter((p) => p.id === id)[0]; }
     _todoLists() {
       // In HA: alle To-do-Listen aus dem Zustand, sonst die Liste aus dem Backend (Vorschau)
-      if (this._hass && this._hass.states) {
-        return Object.keys(this._hass.states).filter((k) => k.indexOf("todo.") === 0).map((k) => ({ entity_id: k, name: this._hass.states[k].attributes.friendly_name || k, platform: ((this._hass.entities || {})[k] || {}).platform }));
-      }
       return this.state.todo_lists || [];
     }
     color(id) { var p = this.person(id); return p ? p.color : "#9aa0ad"; }
@@ -560,6 +559,8 @@ label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--mu
       return "<span class='av " + (cls || "") + "' style='" + bg + "color:" + textOn(p.color) + "'>" + (p.photo ? "" : esc(p.name.charAt(0))) + "</span>";
     }
     act(action, data) {
+      data = Object.assign({}, data || {});
+      if (this._pinToken && Date.now() < this.unlockedUntil) data._pin = this._pinToken;
       return this.backend.act(action, data).then((r) => {
         if (!this.backend.onChange && !this._unsub) return this.backend.load().then((s) => { this.state = s; this.render(); return r; });
         return r;
@@ -576,7 +577,8 @@ label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--mu
       var body = this["v_" + this.view] ? this["v_" + this.view]() : "";
       var scroll = this.shadowRoot.querySelector(".main");
       var top = scroll ? scroll.scrollTop : 0;
-      this._root().innerHTML = "<div class='app'><nav class='rail'>" +
+      var menu = this._hass && this._narrow ? "<button data-act='hamenu'><span class='i'>☰</span>Menü</button>" : "";
+      this._root().innerHTML = "<div class='app'><nav class='rail'>" + menu +
         nav.map((n) => "<button data-act='nav' data-v='" + n[0] + "' class='" + (this.view === n[0] ? "on" : "") + "'><span class='i'>" + n[1] + "</span>" + n[2] + "</button>").join("") +
         "<span class='sp'></span><button data-act='nav' data-v='einstellungen' class='" + (this.view === "einstellungen" ? "on" : "") + "'><span class='i'>⚙️</span>Einstellungen</button></nav>" +
         "<main class='main'>" + body + "</main></div>";
@@ -630,6 +632,7 @@ label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--mu
         var open = st.shopping.filter((x) => x.status !== "completed");
         cards.push("<div class='card' data-act='nav' data-v='einkauf'><h3>🛒 Einkauf</h3><div><b style='font-size:28px'>" + open.length + "</b> <span class='muted'>Artikel</span></div><div class='small muted'>" + open.slice(0, 5).map((x) => esc(x.summary)).join(", ") + "</div></div>");
       }
+      if (!st.persons.length) cols = "<div class='card'><h3>👋 Willkommen</h3><p>Noch keine Personen erfasst. Unter <b>⚙️ Einstellungen → Personen</b> legst du die Familie an, mit Farbe und Foto.</p><button class='btn' data-act='nav' data-v='einstellungen'>Zu den Einstellungen</button></div>";
       return head + "<div class='people'>" + cols + "</div>" + common + "<div class='bottom'>" + cards.join("") + "</div>";
     }
 
@@ -675,7 +678,7 @@ label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--mu
           var waste = this.state.settings.modules.muell !== false ? this.state.waste.filter((w) => Logic.wasteDates(w, 1, d)[0] === d) : [];
           html += "<div class='day " + (d === t ? "today" : "") + "'><div class='dh'><span>" + WD[i] + "</span><span class='muted'>" + parse(d).getDate() + ".</span></div>" +
             waste.map((w) => "<div class='evc' style='background:" + esc(w.color) + "22;color:inherit'>" + esc(w.icon) + " " + esc(w.name) + "</div>").join("") +
-            evs.map((e) => { var c = e.person ? this.color(e.person) : "#6c5ce7"; return "<div class='evc' data-act='event' data-id='" + e.id + "' style='background:" + esc(c) + ";color:" + textOn(c) + "'><b>" + this._evTime(e) + "</b> " + esc(e.title) + "</div>"; }).join("") + "</div>";
+            evs.map((e) => { var c = e.person ? this.color(e.person) : "#6c5ce7"; return "<div class='evc' data-act='event' data-id='" + esc(e.id) + "' style='background:" + esc(c) + ";color:" + textOn(c) + "'><b>" + this._evTime(e) + "</b> " + esc(e.title) + "</div>"; }).join("") + "</div>";
         }
         html += "</div>";
       } else {
@@ -798,6 +801,7 @@ label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--mu
         "<div class='card set-sec'><h3>👪 Personen <span style='flex:1'></span><button class='btn sm' data-act='edit' data-col='persons'>＋ Person</button></h3>" +
         st.persons.map((p) => "<div class='prow'>" + this.av(p) + "<div style='flex:1'><b>" + esc(p.name) + "</b><div class='small muted'>" + (p.role === "kind" ? "Kind" : "Erwachsen") + (p.points_enabled ? " · sammelt Punkte" : "") + (p.ha_person ? " · " + esc(p.ha_person) : "") + (p.calendar ? " · " + esc(p.calendar) : "") + "</div></div><input type='color' value='" + esc(p.color) + "' data-chg='pcolor' data-id='" + p.id + "'><button class='btn sec sm' data-act='edit' data-col='persons' data-id='" + p.id + "'>✏️</button></div>").join("") + "</div>" +
         "<div class='card set-sec'><h3>🧩 Module</h3><div class='grid' style='grid-template-columns:repeat(auto-fill,minmax(170px,1fr))'>" + mods.map((n) => "<label class='row'><input type='checkbox' data-chg='module' data-v='" + n[0] + "' " + (s.modules[n[0]] !== false ? "checked" : "") + ">" + n[1] + " " + n[2] + "</label>").join("") + "</div></div>" +
+        "<div class='card set-sec'><h3>📅 Kalender</h3><div class='form'><label class='f'>Familienkalender (Termine für alle)<select data-chg='set' data-k='family_calendar'><option value=''>– keiner –</option>" + (st.calendar_list || []).map((o) => "<option value='" + esc(o.entity_id) + "'" + (s.family_calendar === o.entity_id ? " selected" : "") + ">" + esc(o.name) + "</option>").join("") + "</select></label><div class='small muted'>Eigene Kalender pro Person wählst du bei der Person (✏️).</div></div></div>" +
         "<div class='card set-sec'><h3>🎨 Darstellung & Schutz</h3><div class='form'>" +
         "<label class='f'>Farbschema<select data-chg='set' data-k='theme'><option value='hell'" + (s.theme === "hell" ? " selected" : "") + ">Hell</option><option value='dunkel'" + (s.theme === "dunkel" ? " selected" : "") + ">Dunkel</option></select></label>" +
         "<label class='row'><input type='checkbox' data-chg='setbool' data-k='lock_calendar' " + (s.lock_calendar ? "checked" : "") + "> Termine anlegen/löschen nur mit PIN</label>" +
@@ -821,6 +825,7 @@ label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--mu
       var st = this.state;
       switch (a) {
         case "nav": this.view = v; this.render(); break;
+        case "hamenu": this.dispatchEvent(new CustomEvent("hass-toggle-menu", { bubbles: true, composed: true })); break;
         case "calmode": this.sub.cal = v; this.render(); break;
         case "calnav": {
           if (v === "0") { this.sub.calDate = null; this.render(); break; }
@@ -848,7 +853,7 @@ label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--mu
         case "shopdone": this._keepScroll = true; this.act("shopping_done", { uid: id }); break;
         case "maintdone": this._who("Wer hat's gemacht?", null, (pid) => this.act("maint_done", { id: id, person: pid }).then(() => this.lob(pid))); break;
         case "unlock": this.pin(() => this.render()); break;
-        case "lock": this.unlockedUntil = 0; this.render(); break;
+        case "lock": this.unlockedUntil = 0; this._pinToken = null; this.render(); break;
         case "newpin": this._newPin(); break;
         case "frametest": this.showFrame(); break;
         case "theme": this._keepScroll = true; this.act("save_settings", { theme: st.settings.theme === "dunkel" ? "hell" : "dunkel" }); break;
@@ -901,8 +906,8 @@ label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--mu
           { k: "name", l: "Name", t: "text" }, { k: "color", l: "Farbe", t: "color" }, { k: "photo", l: "Foto", t: "photo" },
           { k: "role", l: "Rolle", t: "select", o: [["erwachsen", "Erwachsen"], ["kind", "Kind"]] },
           { k: "points_enabled", l: "Sammelt Punkte", t: "toggle" },
-          { k: "ha_person", l: "HA-Person (optional, z. B. person.elternteil_1)", t: "text" },
-          { k: "calendar", l: "Eigener Kalender (optional, z. B. calendar.elternteil_1)", t: "text" }
+          { k: "ha_person", l: "Verknüpfte HA-Person (optional)", t: "select", o: [["", "– keine –"]].concat((st.ha_persons || []).map((o) => [o.entity_id, o.name])) },
+          { k: "calendar", l: "Eigener Kalender (optional)", t: "select", o: [["", "– keiner –"]].concat((st.calendar_list || []).map((o) => [o.entity_id, o.name])) }
         ], def: { color: "#6c5ce7", role: "kind", points_enabled: true } },
         tasks: { title: "Aufgabe", fields: [
           { k: "name", l: "Name", t: "text" }, { k: "icon", l: "Symbol (Emoji)", t: "text" },
@@ -1125,7 +1130,7 @@ label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--mu
         dots.forEach((d, i) => d.classList.toggle("on", i < val.length));
         if (val.length >= 4) {
           this.backend.act("check_pin", { pin: val }).then((r) => {
-            if (r && r.ok) { this.unlockedUntil = Date.now() + 5 * 60000; this.closeDialog(); cb(); }
+            if (r && r.ok) { this._pinToken = r.token || null; this.unlockedUntil = Date.now() + 5 * 60000 - 5000; this.closeDialog(); cb(); }
             else if (val.length >= 4) { val = ""; dots.forEach((d) => d.classList.remove("on")); this.toast("Falsche PIN"); }
           });
         }
