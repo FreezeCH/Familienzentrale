@@ -23,11 +23,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
     def _sync_persons() -> None:
         new = []
         for p in hub.data["persons"]:
-            if p["id"] in known:
+            key = p["id"] + ("+" if p.get("points_enabled") else "")
+            if key in known:
                 continue
-            known.add(p["id"])
-            new.append(PointsSensor(hub, p["id"]))
+            had_open = any(k.split("+")[0] == p["id"] for k in known)
+            known.add(key)
+            if had_open:
+                # Punkte wurden nachträglich eingeschaltet: nur den Punkte-Sensor ergänzen
+                if p.get("points_enabled"):
+                    new.append(PointsSensor(hub, p["id"]))
+                continue
             new.append(OpenTasksSensor(hub, p["id"]))
+            if p.get("points_enabled"):
+                new.append(PointsSensor(hub, p["id"]))
         if new:
             async_add_entities(new)
 
@@ -72,6 +80,11 @@ class PointsSensor(_PersonBase):
         self._attr_unique_id = f"{hub.entry_id}_{person_id}_punkte"
 
     @property
+    def available(self) -> bool:
+        p = self.person
+        return bool(p and p.get("points_enabled"))
+
+    @property
     def name(self) -> str:
         p = self.person
         return f"Punkte {p['name']}" if p else "Punkte"
@@ -107,13 +120,18 @@ class OpenTasksSensor(_PersonBase):
         if not self.person:
             return {}
         today = self.hub.today()
-        return {
-            "aufgaben": [
-                t.get("name")
-                for t in self.hub.data["tasks"]
-                if logic.task_person(t, today) == self.person_id and logic.task_due(t, today)
-            ]
-        }
+        aufgaben = [
+            t.get("name")
+            for t in self.hub.data["tasks"]
+            if self.person_id in logic.task_assignees(t, today) and logic.task_due_for(t, self.person_id, today)
+        ]
+        routinen = []
+        for r in self.hub.data["routines"]:
+            if self.person_id in (r.get("persons") or []) and logic.routine_today(r, today):
+                done, total = logic.routine_progress(r, self.person_id, today)
+                if done < total:
+                    routinen.append(f"{r.get('name')} ({done}/{total})")
+        return {"aufgaben": aufgaben, "routinen": routinen}
 
 
 class NextWasteSensor(_Base):

@@ -129,6 +129,9 @@ class FamilienzentraleHub:
                     settings[key] = val
             data["settings"] = settings
             self.data = data
+            if logic.migrate(self.data):
+                _LOGGER.info("Routinen und Aufgaben ins neue Format übernommen")
+                self._save()
 
     @callback
     def _save(self) -> None:
@@ -185,6 +188,25 @@ class FamilienzentraleHub:
     def _history(self, kind: str, name: str, person: str | None) -> None:
         self.data["history"].insert(0, {"id": _uid(), "kind": kind, "name": name, "person": person, "ts": _now_iso()})
         del self.data["history"][MAX_HISTORY:]
+
+    def _credit(self, person: dict, pts: int, name: str, approval: bool, ref: dict) -> None:
+        if not pts or not person.get("points_enabled"):
+            return
+        if approval:
+            self.data["pending"].append({"id": _uid(), "kind": "aufgabe", "name": name, "person": person["id"], "points": pts, "ts": _now_iso(), **ref})
+        else:
+            self._book(person["id"], pts, name)
+
+    def _uncredit(self, pid: str | None, pts: int, name: str, ref: dict) -> None:
+        if not pid:
+            return
+        match = [x for x in self.data["pending"] if x.get("person") == pid and all(x.get(k) == v for k, v in ref.items())]
+        if match:
+            self.data["pending"] = [x for x in self.data["pending"] if x is not match[0]]
+            return
+        p = self._find("persons", pid)
+        if pts and p and p.get("points_enabled"):
+            self._book(pid, -pts, "↩︎ " + name)
 
     # ---------- PIN ----------
     @property
@@ -365,36 +387,55 @@ class FamilienzentraleHub:
         if action == "complete_task":
             task = self._find("tasks", data.get("task"))
             person = self._find("persons", data.get("person"))
-            if not task:
-                raise HomeAssistantError("Aufgabe nicht gefunden")
-            task["last_done"] = t
-            task["last_by"] = data.get("person")
-            if task.get("rotate"):
+            if not task or not person:
+                raise HomeAssistantError("Aufgabe oder Person nicht gefunden")
+            key = logic.task_key(task, person["id"])
+            task.setdefault("done", {})[key] = t
+            task["last_by"] = person["id"]
+            if logic.task_mode(task) == "reihum":
                 task["rotate_index"] = int(task.get("rotate_index") or 0) + 1
-            self._history("aufgabe", task.get("name", ""), data.get("person"))
+            self._history("aufgabe", task.get("name", ""), person["id"])
             pts = int(task.get("points") or 0)
-            if pts and person and person.get("points_enabled"):
-                if task.get("needs_approval"):
-                    d["pending"].append({"id": _uid(), "kind": "aufgabe", "ref": task["id"], "name": task.get("name"), "person": person["id"], "points": pts, "ts": _now_iso()})
-                else:
-                    self._book(person["id"], pts, task.get("name", ""))
-            self.hass.bus.async_fire(EVENT_TASK_DONE, {"task": task.get("name"), "person": person.get("name") if person else None, "points": pts})
+            self._credit(person, pts, task.get("name", ""), bool(task.get("needs_approval")), {"ref": task["id"], "date": t})
+            self.hass.bus.async_fire(EVENT_TASK_DONE, {"task": task.get("name"), "person": person.get("name"), "points": pts})
 
         elif action == "undo_task":
             task = self._find("tasks", data.get("task"))
-            if task and task.get("last_done") == t:
-                lp = task.get("last_by")
-                pend = [x for x in d["pending"] if x.get("ref") == task["id"] and x.get("person") == lp]
-                if pend:
-                    d["pending"] = [x for x in d["pending"] if x not in pend]
-                else:
-                    p = self._find("persons", lp)
-                    if task.get("points") and p and p.get("points_enabled"):
-                        self._book(lp, -int(task["points"]), "↩︎ " + task.get("name", ""))
-                if task.get("rotate"):
-                    task["rotate_index"] = max(0, int(task.get("rotate_index") or 0) - 1)
-                task["last_done"] = None
-                task["last_by"] = None
+            pid = data.get("person")
+            if task:
+                key = logic.task_key(task, pid)
+                if (task.get("done") or {}).get(key) == t:
+                    who = pid if logic.task_mode(task) == "jeder" else task.get("last_by")
+                    task["done"].pop(key, None)
+                    if logic.task_mode(task) == "reihum":
+                        task["rotate_index"] = max(0, int(task.get("rotate_index") or 0) - 1)
+                    self._uncredit(who, int(task.get("points") or 0), task.get("name", ""), {"ref": task["id"], "date": t})
+
+        elif action in ("complete_step", "undo_step"):
+            r = self._find("routines", data.get("routine"))
+            person = self._find("persons", data.get("person"))
+            if not r or not person:
+                raise HomeAssistantError("Routine oder Person nicht gefunden")
+            step_id = data.get("step") or "*"
+            step = next((x for x in r.get("steps") or [] if x.get("id") == step_id), None)
+            name = (r.get("name", "") + " · " + step.get("name", "")) if step else r.get("name", "")
+            pts = int((step or r).get("points") or 0)
+            rec = r.setdefault("done", {}).get(person["id"]) or {}
+            steps_done = list(rec.get("steps") or []) if rec.get("date") == t else []
+            ref = {"ref": r["id"], "step": step_id, "date": t}
+            if action == "complete_step":
+                if step_id in steps_done:
+                    return result
+                steps_done.append(step_id)
+                self._history("routine", name, person["id"])
+                self._credit(person, pts, name, bool(r.get("needs_approval")), ref)
+                self.hass.bus.async_fire(EVENT_TASK_DONE, {"task": name, "person": person.get("name"), "points": pts, "routine": r.get("name")})
+            else:
+                if step_id not in steps_done:
+                    return result
+                steps_done.remove(step_id)
+                self._uncredit(person["id"], pts, name, ref)
+            r["done"][person["id"]] = {"date": t, "steps": steps_done}
 
         elif action == "redeem":
             rw = self._find("rewards", data.get("reward"))

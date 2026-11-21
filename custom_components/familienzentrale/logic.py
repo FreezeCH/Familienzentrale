@@ -54,9 +54,36 @@ def available(data: dict, person_id: str) -> int:
     return points(data, person_id) + reserved
 
 
-def task_due(task: dict, day: date) -> bool:
+# ---------- Aufgaben ----------
+# Zuteilung (mode):
+#   "jeder"     jede zugeteilte Person erledigt die Aufgabe für sich
+#   "gemeinsam" einer für alle: sobald jemand sie erledigt, ist sie für alle erledigt
+#   "reihum"    die zuständige Person wechselt nach jedem Erledigen
+# Erledigt-Stand: task["done"] = {person_id oder "*": "JJJJ-MM-TT"}
+
+
+def task_mode(task: dict) -> str:
+    return task.get("mode") or "jeder"
+
+
+def task_key(task: dict, person_id: str | None) -> str:
+    if task_mode(task) == "jeder":
+        return person_id or "*"
+    return "*"
+
+
+def _last_done(task: dict, person_id: str | None) -> date | None:
+    return parse((task.get("done") or {}).get(task_key(task, person_id)))
+
+
+def task_done_for(task: dict, person_id: str | None, day: date) -> bool:
+    return _last_done(task, person_id) == day
+
+
+def task_due_for(task: dict, person_id: str | None, day: date) -> bool:
+    """Ist die Aufgabe heute für diese Person (noch) fällig?"""
     r = task.get("repeat") or {"type": "once"}
-    last = parse(task.get("last_done"))
+    last = _last_done(task, person_id)
     if last == day:
         return False
     typ = r.get("type")
@@ -69,33 +96,108 @@ def task_due(task: dict, day: date) -> bool:
             return add_interval(last, r.get("every"), r.get("unit")) <= day
         start = parse(r.get("start")) or day
         return start <= day
-    # einmalig
-    if last:
+    if last:  # einmalig und schon erledigt
         return False
     return (parse(r.get("date")) or day) <= day
 
 
-def task_done_today(task: dict, day: date) -> bool:
-    return parse(task.get("last_done")) == day
+def task_assignees(task: dict, day: date) -> list[str]:
+    """Wer sieht die Aufgabe heute in seiner Liste?"""
+    persons = list(task.get("persons") or [])
+    if task_mode(task) == "reihum" and persons:
+        if task_done_for(task, None, day) and task.get("last_by"):
+            return [task["last_by"]]
+        return [persons[int(task.get("rotate_index") or 0) % len(persons)]]
+    return persons
 
 
-def task_person(task: dict, day: date) -> str | None:
-    persons = task.get("persons") or []
-    if task_done_today(task, day) and task.get("last_by"):
-        return task["last_by"]
-    if not persons:
-        return None
-    if not task.get("rotate"):
-        return persons[0]
-    return persons[int(task.get("rotate_index") or 0) % len(persons)]
+def task_today(task: dict, person_id: str, day: date) -> bool:
+    """Gehört die Aufgabe heute zu dieser Person (offen oder heute erledigt)?"""
+    if person_id not in task_assignees(task, day):
+        return False
+    return task_due_for(task, person_id, day) or task_done_for(task, person_id, day)
+
+
+# ---------- Routinen ----------
+# routine = {persons, days (leer = täglich), time, steps: [{id, name, icon, points}],
+#            points (nur ohne Schritte), done: {person_id: {"date": ..., "steps": [...]}}}
+
+
+def routine_today(routine: dict, day: date) -> bool:
+    days = [int(x) for x in (routine.get("days") or [])]
+    return not days or day.weekday() in days
+
+
+def routine_done_steps(routine: dict, person_id: str, day: date) -> list[str]:
+    rec = (routine.get("done") or {}).get(person_id) or {}
+    return list(rec.get("steps") or []) if rec.get("date") == day.isoformat() else []
+
+
+def routine_progress(routine: dict, person_id: str, day: date) -> tuple[int, int]:
+    """(erledigt, gesamt) – eine Routine ohne Schritte zählt als ein Schritt."""
+    steps = routine.get("steps") or []
+    done = routine_done_steps(routine, person_id, day)
+    if not steps:
+        return (1 if "*" in done else 0, 1)
+    ids = {s.get("id") for s in steps}
+    return (len([x for x in done if x in ids]), len(steps))
 
 
 def open_tasks(data: dict, person_id: str, day: date) -> int:
-    return sum(
+    n = sum(
         1
         for t in data.get("tasks", [])
-        if task_person(t, day) == person_id and task_due(t, day)
+        if person_id in task_assignees(t, day) and task_due_for(t, person_id, day)
     )
+    for r in data.get("routines", []):
+        if person_id in (r.get("persons") or []) and routine_today(r, day):
+            done, total = routine_progress(r, person_id, day)
+            n += total - done
+    return n
+
+
+# ---------- Übernahme älterer Daten (Version 0.2) ----------
+
+
+def migrate(data: dict) -> bool:
+    """Bringt Routinen und Aufgaben aus 0.2 ins neue Modell. Gibt True zurück, wenn etwas geändert wurde."""
+    changed = False
+    routines = {r.get("id"): r for r in data.get("routines", [])}
+    for r in routines.values():
+        if "persons" not in r:
+            r["persons"] = [r["person"]] if r.get("person") else []
+            r.pop("person", None)
+            changed = True
+        r.setdefault("days", [])
+        r.setdefault("steps", [])
+        r.setdefault("done", {})
+    keep = []
+    for t in data.get("tasks", []):
+        rid = t.get("routine")
+        if rid and rid in routines:
+            routines[rid]["steps"].append(
+                {"id": t.get("id"), "name": t.get("name", ""), "icon": t.get("icon", ""), "points": int(t.get("points") or 0)}
+            )
+            if t.get("needs_approval"):
+                routines[rid]["needs_approval"] = True
+            changed = True
+            continue
+        if "mode" not in t:
+            t["mode"] = "reihum" if t.get("rotate") else "jeder"
+            t.pop("rotate", None)
+            changed = True
+        if "done" not in t:
+            t["done"] = {}
+            if t.get("last_done"):
+                key = "*" if t["mode"] != "jeder" else (t.get("last_by") or (t.get("persons") or ["*"])[0])
+                t["done"][key] = t["last_done"]
+            changed = True
+        t.pop("last_done", None)
+        t.pop("routine", None)
+        keep.append(t)
+    if len(keep) != len(data.get("tasks", [])):
+        data["tasks"] = keep
+    return changed
 
 
 def week_start(d: date) -> date:

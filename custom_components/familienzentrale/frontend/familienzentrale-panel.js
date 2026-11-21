@@ -49,6 +49,25 @@
   ];
   var SLOTS = [["fruehstueck", "Frühstück"], ["mittag", "Mittag"], ["abend", "Abend"]];
   var TIMES = [["morgen", "Morgen 🌅"], ["mittag", "Mittag ☀️"], ["abend", "Abend 🌙"]];
+  // Auswahl für Symbole (Routinen, Aufgaben, Belohnungen, Wartung, Müll)
+  var ICONS = [
+    ["Körper & Morgen", "🦷 🚿 🛁 🧼 🧴 💇 👕 👖 🧦 👟 🧥 🛏️ 🌅 ☀️ ⏰"],
+    ["Abend & Schlaf", "🌙 😴 🛌 📖 🧸 💤"],
+    ["Schule & Lernen", "🎒 📚 ✏️ 📝 🎹 🎸 🎻 ⚽ 🏊 🚲"],
+    ["Küche & Essen", "🍽️ 🥣 🥗 🍳 🥪 🍎 🥛 🧃 🧊 🫖 ☕"],
+    ["Haushalt", "🧹 🧽 🧺 🧻 🗑️ ♻️ 🍾 📦 📰 🛒 🧾 🚪 🔑 🧯"],
+    ["Garten & Tiere", "🌱 🌻 🌳 🍂 💧 🐶 🐱 🐰 🐟 🐦"],
+    ["Technik & Wartung", "🔧 🔨 🔋 💡 🚨 🌬️ 🔥 🚗 🧰 🖨️ 💻 📱"],
+    ["Belohnung & Spass", "🎁 ⭐ 🏆 🍦 🍫 🍿 📺 🎮 🎡 🎨 🎬 🏖️ 🎉 💶"],
+    ["Sonstiges", "✨ ✅ ❤️ 👍 🙌 📌 🗓️ 🏠 👪"]
+  ].map(function (g) { return [g[0], g[1].split(" ")]; });
+  var daysText = function (days) {
+    days = (days || []).map(Number).sort();
+    if (!days.length || days.length === 7) return "täglich";
+    if (days.join() === "0,1,2,3,4") return "Mo–Fr";
+    if (days.join() === "5,6") return "Wochenende";
+    return days.map(function (i) { return WD[i]; }).join(", ");
+  };
   var UNITS = [["tage", "Tage"], ["wochen", "Wochen"], ["monate", "Monate"], ["jahre", "Jahre"]];
 
   // ---------- Fachlogik (gleich im Python-Backend) ----------
@@ -60,28 +79,39 @@
     available: function (st, pid) {
       return Logic.points(st, pid) + (st.pending || []).filter(function (x) { return x.person === pid && x.points < 0; }).reduce(function (s, x) { return s + x.points; }, 0);
     },
-    taskDue: function (t, day) {
+    // Aufgaben: mode "jeder" (jede Person für sich), "gemeinsam" (einer für alle), "reihum"
+    taskMode: function (t) { return t.mode || "jeder"; },
+    taskKey: function (t, pid) { return Logic.taskMode(t) === "jeder" ? (pid || "*") : "*"; },
+    taskDoneFor: function (t, pid, day) { return ((t.done || {})[Logic.taskKey(t, pid)]) === (day || todayIso()); },
+    taskDueFor: function (t, pid, day) {
       day = day || todayIso();
-      var r = t.repeat || { type: "once" };
-      if (t.last_done === day) return false;
-      if (r.type === "weekly") return (r.days || []).indexOf(wd(parse(day))) >= 0;
-      if (r.type === "interval") {
-        var base = t.last_done || r.start || day;
-        var next = t.last_done ? addInterval(base, r.every, r.unit) : base;
-        return next <= day;
-      }
+      var r = t.repeat || { type: "once" }, last = (t.done || {})[Logic.taskKey(t, pid)];
+      if (last === day) return false;
       if (r.type === "daily") return true;
-      return !t.last_done && (r.date || day) <= day;
+      if (r.type === "weekly") return (r.days || []).indexOf(wd(parse(day))) >= 0;
+      if (r.type === "interval") return (last ? addInterval(last, r.every, r.unit) : (r.start || day)) <= day;
+      return !last && (r.date || day) <= day;
     },
-    taskDoneToday: function (t) { return t.last_done === todayIso(); },
-    taskPerson: function (t, day) {
-      var ps = t.persons || [];
-      if (t.last_done === todayIso() && t.last_by) return t.last_by;
-      if (!ps.length) return null;
-      if (!t.rotate) return ps[0];
-      var n = t.rotate_index || 0;
-      return ps[n % ps.length];
+    taskAssignees: function (t, day) {
+      var ps = (t.persons || []).slice();
+      if (Logic.taskMode(t) === "reihum" && ps.length) {
+        if (Logic.taskDoneFor(t, null, day) && t.last_by) return [t.last_by];
+        return [ps[(t.rotate_index || 0) % ps.length]];
+      }
+      return ps;
     },
+    taskToday: function (t, pid, day) {
+      return Logic.taskAssignees(t, day).indexOf(pid) >= 0 && (Logic.taskDueFor(t, pid, day) || Logic.taskDoneFor(t, pid, day));
+    },
+    // Routinen: für mehrere Personen, an Wochentagen (leer = täglich), mit Schritten
+    routineToday: function (r, day) { var d = r.days || []; return !d.length || d.indexOf(wd(parse(day || todayIso()))) >= 0; },
+    routineDone: function (r, pid, day) { var x = (r.done || {})[pid]; return x && x.date === (day || todayIso()) ? (x.steps || []) : []; },
+    routineProgress: function (r, pid, day) {
+      var done = Logic.routineDone(r, pid, day), steps = r.steps || [];
+      if (!steps.length) return [done.indexOf("*") >= 0 ? 1 : 0, 1];
+      return [steps.filter(function (x) { return done.indexOf(x.id) >= 0; }).length, steps.length];
+    },
+    modeText: function (m) { return { jeder: "jeder für sich", gemeinsam: "einer für alle", reihum: "reihum" }[m || "jeder"]; },
     repeatText: function (r) {
       r = r || {};
       if (r.type === "daily") return "täglich";
@@ -129,7 +159,7 @@
   };
 
   function MockBackend(seed) {
-    this.key = "familienzentrale_demo_v3";
+    this.key = "familienzentrale_demo_v4";
     var saved = null;
     try { saved = JSON.parse(localStorage.getItem(this.key) || "null"); } catch (e) { saved = null; }
     this.state = saved || JSON.parse(JSON.stringify(seed || DEMO_SEED()));
@@ -147,34 +177,63 @@
     var st = this.state, now = new Date().toISOString(), t = todayIso();
     var find = function (col, id) { return (st[col] || []).filter(function (x) { return x.id === id; })[0]; };
     var book = function (pid, delta, reason) { st.ledger.push({ id: uid(), person: pid, delta: delta, reason: reason, ts: now }); };
+    var credit = function (p, pts, name, approval, ref) {
+      pts = Number(pts) || 0;
+      if (!pts || !p || !p.points_enabled) return;
+      if (approval) st.pending.push(Object.assign({ id: uid(), kind: "aufgabe", name: name, person: p.id, points: pts, ts: now }, ref));
+      else book(p.id, pts, name);
+    };
+    var uncredit = function (pid, pts, name, ref) {
+      pts = Number(pts) || 0;
+      var m = st.pending.filter(function (x) { return x.person === pid && Object.keys(ref).every(function (k) { return x[k] === ref[k]; }); })[0];
+      if (m) { st.pending = st.pending.filter(function (x) { return x !== m; }); return; }
+      var pp = find("persons", pid);
+      if (pts && pp && pp.points_enabled) book(pid, -pts, "↩︎ " + name);
+    };
     switch (action) {
       case "check_pin":
         return Promise.resolve({ ok: !st.settings.pin || data.pin === st.settings.pin });
-      case "complete_task": {
-        var task = find("tasks", data.task);
+      case "complete_task":
+      case "undo_task": {
+        var task = find("tasks", data.task), p = find("persons", data.person);
         if (!task) break;
-        task.last_done = t;
-        task.last_by = data.person;
-        if (task.rotate) task.rotate_index = (task.rotate_index || 0) + 1;
-        st.history.unshift({ id: uid(), kind: "aufgabe", name: task.name, person: data.person, ts: now });
-        var p = find("persons", data.person);
-        if (task.points && p && p.points_enabled) {
-          if (task.needs_approval) st.pending.push({ id: uid(), kind: "aufgabe", ref: task.id, name: task.name, person: data.person, points: task.points, ts: now });
-          else book(data.person, task.points, task.name);
+        task.done = task.done || {};
+        var key = Logic.taskKey(task, data.person), ref = { ref: task.id, date: t };
+        if (action === "complete_task") {
+          if (!p) break;
+          task.done[key] = t; task.last_by = p.id;
+          if (Logic.taskMode(task) === "reihum") task.rotate_index = (task.rotate_index || 0) + 1;
+          st.history.unshift({ id: uid(), kind: "aufgabe", name: task.name, person: p.id, ts: now });
+          credit(p, task.points, task.name, task.needs_approval, ref);
+        } else if (task.done[key] === t) {
+          var who = Logic.taskMode(task) === "jeder" ? data.person : task.last_by;
+          delete task.done[key];
+          if (Logic.taskMode(task) === "reihum") task.rotate_index = Math.max(0, (task.rotate_index || 0) - 1);
+          uncredit(who, task.points, task.name, ref);
         }
         break;
       }
-      case "undo_task": {
-        var tk = find("tasks", data.task);
-        if (tk && tk.last_done === t) {
-          // Punkte der heutigen Erledigung wieder abziehen bzw. offene Bestätigung entfernen
-          var lp = tk.last_by;
-          var pend = st.pending.filter(function (x) { return x.ref === tk.id && x.person === lp; });
-          if (pend.length) st.pending = st.pending.filter(function (x) { return pend.indexOf(x) < 0; });
-          else if (tk.points && find("persons", lp) && find("persons", lp).points_enabled) book(lp, -tk.points, "↩︎ " + tk.name);
-          if (tk.rotate) tk.rotate_index = Math.max(0, (tk.rotate_index || 0) - 1);
-          tk.last_done = null; tk.last_by = null;
+      case "complete_step":
+      case "undo_step": {
+        var r = find("routines", data.routine), pr = find("persons", data.person);
+        if (!r || !pr) break;
+        var sid = data.step || "*";
+        var step = (r.steps || []).filter(function (x) { return x.id === sid; })[0];
+        var nm = step ? r.name + " · " + step.name : r.name, pts = Number((step || r).points) || 0;
+        r.done = r.done || {};
+        var rec = r.done[pr.id] && r.done[pr.id].date === t ? r.done[pr.id].steps.slice() : [];
+        var rref = { ref: r.id, step: sid, date: t };
+        if (action === "complete_step") {
+          if (rec.indexOf(sid) >= 0) break;
+          rec.push(sid);
+          st.history.unshift({ id: uid(), kind: "routine", name: nm, person: pr.id, ts: now });
+          credit(pr, pts, nm, r.needs_approval, rref);
+        } else {
+          if (rec.indexOf(sid) < 0) break;
+          rec = rec.filter(function (x) { return x !== sid; });
+          uncredit(pr.id, pts, nm, rref);
         }
+        r.done[pr.id] = { date: t, steps: rec };
         break;
       }
       case "redeem": {
@@ -298,25 +357,20 @@
         { id: "e6", person: "p3", title: "Klavier", start: at(3, 15, 0), end: at(3, 16, 0) }
       ],
       routines: [
-        { id: "r1", name: "Morgenroutine", person: "p3", time: "morgen", icon: "🌅" },
-        { id: "r2", name: "Abendroutine", person: "p3", time: "abend", icon: "🌙" },
-        { id: "r3", name: "Morgenroutine", person: "p4", time: "morgen", icon: "🌅" },
-        { id: "r4", name: "Abendroutine", person: "p4", time: "abend", icon: "🌙" }
+        { id: "r1", name: "Morgenroutine", icon: "🌅", persons: ["p3", "p4"], time: "morgen", days: [], steps: [
+          { id: "s1", name: "Zähne putzen", icon: "🦷", points: 1 }, { id: "s2", name: "Anziehen", icon: "👕", points: 1 }, { id: "s3", name: "Bett machen", icon: "🛏️", points: 2 }] },
+        { id: "r2", name: "Abendroutine", icon: "🌙", persons: ["p3", "p4"], time: "abend", days: [], steps: [
+          { id: "s4", name: "Spielzeug aufräumen", icon: "🧸", points: 2 }, { id: "s5", name: "Zähne putzen", icon: "🦷", points: 1 }, { id: "s6", name: "Pyjama anziehen", icon: "😴", points: 1 }] },
+        { id: "r3", name: "Schultasche packen", icon: "🎒", persons: ["p3"], time: "abend", days: [6, 0, 1, 2, 3], steps: [], points: 2 },
+        { id: "r4", name: "Entsorgen", icon: "♻️", persons: ["p3", "p4"], time: "morgen", days: [5], steps: [
+          { id: "s7", name: "Altglas", icon: "🍾", points: 2 }, { id: "s8", name: "Papier bündeln", icon: "📰", points: 2 }] }
       ],
       tasks: [
-        { id: "t1", name: "Zähne putzen", icon: "🦷", persons: ["p3"], routine: "r1", points: 1, repeat: { type: "daily" } },
-        { id: "t2", name: "Anziehen", icon: "👕", persons: ["p3"], routine: "r1", points: 1, repeat: { type: "daily" } },
-        { id: "t3", name: "Bett machen", icon: "🛏️", persons: ["p3"], routine: "r1", points: 2, repeat: { type: "daily" } },
-        { id: "t4", name: "Schulsachen packen", icon: "🎒", persons: ["p3"], routine: "r2", points: 2, repeat: { type: "weekly", days: [6, 0, 1, 2, 3] } },
-        { id: "t5", name: "Zähne putzen", icon: "🦷", persons: ["p3"], routine: "r2", points: 1, repeat: { type: "daily" } },
-        { id: "t6", name: "Zähne putzen", icon: "🦷", persons: ["p4"], routine: "r3", points: 1, repeat: { type: "daily" } },
-        { id: "t7", name: "Anziehen", icon: "👕", persons: ["p4"], routine: "r3", points: 1, repeat: { type: "daily" } },
-        { id: "t8", name: "Spielzeug aufräumen", icon: "🧸", persons: ["p4"], routine: "r4", points: 2, repeat: { type: "daily" } },
-        { id: "t9", name: "Pyjama anziehen", icon: "😴", persons: ["p4"], routine: "r4", points: 1, repeat: { type: "daily" } },
-        { id: "t10", name: "Tisch decken", icon: "🍽️", persons: ["p3", "p4"], rotate: true, points: 3, repeat: { type: "daily" }, needs_approval: true },
-        { id: "t11", name: "Bad putzen", icon: "🛁", persons: ["p1"], points: 0, room: "Bad", repeat: { type: "weekly", days: [5] } },
-        { id: "t12", name: "Pflanzen giessen", icon: "🌱", persons: ["p2"], points: 0, repeat: { type: "interval", every: 3, unit: "tage", after_done: true, start: d(0) } },
-        { id: "t13", name: "Staubsaugen", icon: "🧹", persons: ["p1", "p2"], rotate: true, points: 0, repeat: { type: "weekly", days: [wd(t)] } }
+        { id: "t10", name: "Tisch decken", icon: "🍽️", persons: ["p3", "p4"], mode: "reihum", points: 3, repeat: { type: "daily" }, needs_approval: true, done: {} },
+        { id: "t11", name: "Bad putzen", icon: "🛁", persons: ["p1"], mode: "jeder", points: 0, room: "Bad", repeat: { type: "weekly", days: [5] }, done: {} },
+        { id: "t12", name: "Pflanzen giessen", icon: "🌱", persons: ["p2"], mode: "jeder", points: 0, repeat: { type: "interval", every: 3, unit: "tage", start: d(0) }, done: {} },
+        { id: "t13", name: "Staubsaugen", icon: "🧹", persons: ["p1", "p2"], mode: "reihum", points: 0, repeat: { type: "weekly", days: [wd(t)] }, done: {} },
+        { id: "t14", name: "Geschirrspüler ausräumen", icon: "🍽️", persons: ["p1", "p2", "p3"], mode: "gemeinsam", points: 2, repeat: { type: "daily" }, done: {} }
       ],
       rewards: [
         { id: "w1", name: "30 Min. Bildschirm", icon: "📺", cost: 15, needs_approval: true },
@@ -463,6 +517,15 @@ label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--mu
 .days{display:flex;gap:6px;flex-wrap:wrap}\
 .days button{width:42px;height:42px;border-radius:50%;border:1px solid var(--line);background:var(--bg)}\
 .days button.on{background:var(--accent);color:#fff;border-color:var(--accent)}\
+.iconbtn{width:52px;height:46px;border-radius:12px;border:1px solid var(--line);background:var(--bg);font-size:26px;flex:none}\
+.igrid{background:var(--bg);border-radius:14px;padding:8px;margin-top:6px;max-height:260px;overflow-y:auto}\
+.igrid .ig{font-size:12px;color:var(--muted);font-weight:600;margin:6px 2px 2px}\
+.igrid button{width:44px;height:44px;border:0;background:none;font-size:26px;border-radius:10px}\
+.igrid button:hover{background:var(--line)}\
+.steprow{display:flex;gap:6px;align-items:center;margin-bottom:6px}\
+.steprow input[data-st=name]{flex:1}.steprow input[data-st=points]{width:70px}\
+.pchip{cursor:pointer;border:0}.pchip.off{opacity:.35;text-decoration:line-through}\
+.rperson{display:flex;flex-direction:column;gap:8px;padding:10px 0;border-top:1px solid var(--line)}\
 .who{display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:10px}\
 .who button{border:0;background:var(--bg);border-radius:16px;padding:12px;display:flex;flex-direction:column;align-items:center;gap:6px;font-weight:600}\
 .pinpad{display:grid;grid-template-columns:repeat(3,72px);gap:10px;justify-content:center;margin-top:10px}\
@@ -592,23 +655,25 @@ label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--mu
       var head = "<div class='head'><span class='clock'>" + this._time() + "</span><span class='sub'>" + WD_LANG[wd(now)] + ", " + now.getDate() + ". " + MON[now.getMonth()] + " " + now.getFullYear() + "</span><span class='grow'></span>" + this._pendingBadge() + "<button class='btn sec sm' data-act='theme' title='Hell / Dunkel'>" + (st.settings.theme === "dunkel" ? "☀️ Hell" : "🌙 Dunkel") + "</button></div>";
       var cols = st.persons.map((p) => {
         var evs = this._eventsOn(t).filter((e) => e.person === p.id);
-        var tasks = st.tasks.filter((x) => Logic.taskPerson(x) === p.id && (Logic.taskDue(x) || Logic.taskDoneToday(x)));
-        var done = tasks.filter(Logic.taskDoneToday).length;
-        var open = tasks.filter((x) => !Logic.taskDoneToday(x));
+        var tasks = st.tasks.filter((x) => Logic.taskToday(x, p.id));
+        var rts = st.routines.filter((r) => (r.persons || []).indexOf(p.id) >= 0 && Logic.routineToday(r));
+        var done = tasks.filter((x) => Logic.taskDoneFor(x, p.id)).length, total = tasks.length;
+        rts.forEach((r) => { var pr = Logic.routineProgress(r, p.id); done += pr[0]; total += pr[1]; });
+        var open = tasks.filter((x) => !Logic.taskDoneFor(x, p.id));
         var bodyHtml = "";
         bodyHtml += evs.length ? evs.map((e) => "<div class='ev'><span class='bar' style='background:" + esc(p.color) + "'></span><span class='t'>" + this._evTime(e) + "</span><span>" + esc(e.title) + "</span></div>").join("") : "<div class='empty'>Keine Termine heute</div>";
-        if (tasks.length) {
-          bodyHtml += "<div class='row small muted'><span>Aufgaben " + done + "/" + tasks.length + "</span></div><div class='prog'><i style='width:" + Math.round(100 * done / tasks.length) + "%;background:" + esc(p.color) + "'></i></div>";
-          // Routinen kompakt als eine Zeile, einzelne Aufgaben zum Abhaken
-          st.routines.filter((r) => r.person === p.id).forEach((r) => {
-            var rt = tasks.filter((x) => x.routine === r.id);
-            if (!rt.length) return;
-            var rd = rt.filter(Logic.taskDoneToday).length;
-            bodyHtml += "<button class='task' style='border:0;text-align:left' data-act='nav' data-v='aufgaben'><span class='ic'>" + esc(r.icon || "•") + "</span><span class='nm'>" + esc(r.name) + "</span><b class='small' style='color:" + (rd === rt.length ? "var(--ok)" : "var(--muted)") + "'>" + rd + "/" + rt.length + (rd === rt.length ? " ✓" : "") + "</b></button>";
+        if (total) {
+          bodyHtml += "<div class='row small muted'><span>Heute " + done + "/" + total + "</span></div><div class='prog'><i style='width:" + Math.round(100 * done / total) + "%;background:" + esc(p.color) + "'></i></div>";
+          rts.forEach((r) => {
+            var pr = Logic.routineProgress(r, p.id), ok = pr[0] === pr[1];
+            if (!(r.steps || []).length) {
+              bodyHtml += "<div class='task " + (ok ? "done" : "") + "'><span class='ic'>" + esc(r.icon || "•") + "</span><span class='nm'>" + esc(r.name) + "</span><button class='chk " + (ok ? "on" : "") + "' data-act='rstep' data-r='" + r.id + "' data-p='" + p.id + "' data-s='*'>" + (ok ? "✓" : "") + "</button></div>";
+            } else {
+              bodyHtml += "<button class='task' style='border:0;text-align:left' data-act='nav' data-v='aufgaben'><span class='ic'>" + esc(r.icon || "•") + "</span><span class='nm'>" + esc(r.name) + "</span><b class='small' style='color:" + (ok ? "var(--ok)" : "var(--muted)") + "'>" + pr[0] + "/" + pr[1] + (ok ? " ✓" : "") + "</b></button>";
+            }
           });
-          var single = open.filter((x) => !x.routine);
-          bodyHtml += single.slice(0, 4).map((x) => this._taskRow(x, p.id)).join("");
-          if (single.length > 4) bodyHtml += "<div class='small muted'>+ " + (single.length - 4) + " weitere</div>";
+          bodyHtml += open.slice(0, 4).map((x) => this._taskRow(x, p.id)).join("");
+          if (open.length > 4) bodyHtml += "<div class='small muted'>+ " + (open.length - 4) + " weitere</div>";
         }
         return "<div class='pcol'><div class='ph' style='background:" + esc(p.color) + ";color:" + textOn(p.color) + "'>" + this.av(p) + "<span class='pname'>" + esc(p.name) + "</span>" + (p.points_enabled && st.settings.modules.punkte !== false ? "<span class='pts'>⭐ " + Logic.points(st, p.id) + "</span>" : "") + "</div><div class='pb'>" + bodyHtml + "</div></div>";
       }).join("");
@@ -658,8 +723,9 @@ label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--mu
       }).sort((a, b) => String(a.start) < String(b.start) ? -1 : 1);
     }
     _taskRow(x, pid) {
-      var done = Logic.taskDoneToday(x);
-      return "<div class='task " + (done ? "done" : "") + "'><span class='ic'>" + esc(x.icon || "•") + "</span><span class='nm'>" + esc(x.name) + (x.points ? " <span class='muted small'>⭐" + x.points + "</span>" : "") + "</span><button class='chk " + (done ? "on" : "") + "' data-act='" + (done ? "undo" : "done") + "' data-id='" + x.id + "' data-p='" + (pid || "") + "'>" + (done ? "✓" : "") + "</button></div>";
+      var done = Logic.taskDoneFor(x, pid);
+      var hint = Logic.taskMode(x) === "gemeinsam" ? " <span class='muted small'>👪</span>" : Logic.taskMode(x) === "reihum" ? " <span class='muted small'>↻</span>" : "";
+      return "<div class='task " + (done ? "done" : "") + "'><span class='ic'>" + esc(x.icon || "•") + "</span><span class='nm'>" + esc(x.name) + hint + (x.points ? " <span class='muted small'>⭐" + x.points + "</span>" : "") + "</span><button class='chk " + (done ? "on" : "") + "' data-act='" + (done ? "undo" : "done") + "' data-id='" + x.id + "' data-p='" + (pid || "") + "'>" + (done ? "✓" : "") + "</button></div>";
     }
 
     v_kalender() {
@@ -667,14 +733,17 @@ label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--mu
       var base = this.sub.calDate ? parse(this.sub.calDate) : new Date();
       var tabs = "<div class='toolbar'><div class='tabs' style='margin:0'><button data-act='calmode' data-v='woche' class='" + (mode === "woche" ? "on" : "") + "'>Woche</button><button data-act='calmode' data-v='monat' class='" + (mode === "monat" ? "on" : "") + "'>Monat</button></div>" +
         "<button class='btn sec sm' data-act='calnav' data-v='-1'>‹</button><button class='btn sec sm' data-act='calnav' data-v='0'>Heute</button><button class='btn sec sm' data-act='calnav' data-v='1'>›</button><span class='grow' style='flex:1'></span><button class='btn' data-act='addevent'>＋ Termin</button></div>";
-      var legend = "<div class='row small' style='flex-wrap:wrap;margin-bottom:10px'>" + this.state.persons.map((p) => "<span class='pill' style='background:" + esc(p.color) + ";color:" + textOn(p.color) + "'>" + esc(p.name) + "</span>").join("") + "<span class='pill' style='background:var(--accent);color:#fff'>Alle</span></div>";
+      var hid = this._calHidden();
+      var chip = (key, name, color) => "<button class='pill pchip " + (hid[key] ? "off" : "") + "' data-act='calfilter' data-v='" + key + "' style='background:" + esc(color) + ";color:" + textOn(color) + "'>" + (hid[key] ? "" : "✓ ") + esc(name) + "</button>";
+      var legend = "<div class='row small' style='flex-wrap:wrap;margin-bottom:10px'><span class='muted'>Anzeigen:</span>" + this.state.persons.map((p) => chip(p.id, p.name, p.color)).join("") + chip("_alle", "Familie", "#6c5ce7") + "</div>";
+      var vis = (e) => !hid[e.person && this.person(e.person) ? e.person : "_alle"];
       var t = todayIso(), html = "";
       if (mode === "woche") {
         var ws = weekStart(base);
         html = "<div class='head'><h1>KW " + this._kw(ws) + "</h1><span class='sub'>" + fmtDate(iso(ws)) + " – " + fmtDate(iso(addDays(ws, 6))) + "</span></div>" + tabs + legend + "<div class='week'>";
         for (var i = 0; i < 7; i++) {
           var d = iso(addDays(ws, i));
-          var evs = this._eventsOn(d);
+          var evs = this._eventsOn(d).filter(vis);
           var waste = this.state.settings.modules.muell !== false ? this.state.waste.filter((w) => Logic.wasteDates(w, 1, d)[0] === d) : [];
           html += "<div class='day " + (d === t ? "today" : "") + "'><div class='dh'><span>" + WD[i] + "</span><span class='muted'>" + parse(d).getDate() + ".</span></div>" +
             waste.map((w) => "<div class='evc' style='background:" + esc(w.color) + "22;color:inherit'>" + esc(w.icon) + " " + esc(w.name) + "</div>").join("") +
@@ -687,40 +756,49 @@ label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--mu
         html = "<div class='head'><h1>" + MON[base.getMonth()] + " " + base.getFullYear() + "</h1></div>" + tabs + legend + "<div class='month'>" + WD.map((w) => "<div class='h small muted' style='text-align:center'>" + w + "</div>").join("");
         for (var k = 0; k < 42; k++) {
           var dd = addDays(gs, k), ds = iso(dd);
-          var ev = this._eventsOn(ds);
+          var ev = this._eventsOn(ds).filter(vis);
           html += "<div class='mc " + (dd.getMonth() !== base.getMonth() ? "other " : "") + (ds === t ? "today" : "") + "' data-act='dayjump' data-v='" + ds + "'><b>" + dd.getDate() + "</b><div class='dots'>" + ev.map((e) => "<i style='background:" + esc(e.person ? this.color(e.person) : "#6c5ce7") + "'></i>").join("") + "</div></div>";
         }
         html += "</div>";
       }
       return html;
     }
+    _calHidden() {
+      if (!this.__calHidden) { try { this.__calHidden = JSON.parse(localStorage.getItem("fz_cal_hidden") || "{}"); } catch (e) { this.__calHidden = {}; } }
+      return this.__calHidden;
+    }
     _kw(d) { var x = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate())); var dn = x.getUTCDay() || 7; x.setUTCDate(x.getUTCDate() + 4 - dn); var y = new Date(Date.UTC(x.getUTCFullYear(), 0, 1)); return Math.ceil(((x - y) / 86400000 + 1) / 7); }
 
     v_aufgaben() {
       var st = this.state, tab = this.sub.task || "routinen";
-      var html = "<div class='head'><h1>Aufgaben</h1><span class='grow'></span><button class='btn sec' data-act='history'>📜 Verlauf</button><button class='btn' data-act='edit' data-col='" + (tab === "routinen" ? "routines" : "tasks") + "'>＋ " + (tab === "routinen" ? "Routine" : "Aufgabe") + "</button></div>";
-      html += "<div class='tabs'><button data-act='tasktab' data-v='routinen' class='" + (tab === "routinen" ? "on" : "") + "'>Routinen</button><button data-act='tasktab' data-v='heute' class='" + (tab === "heute" ? "on" : "") + "'>Heute</button><button data-act='tasktab' data-v='alle' class='" + (tab === "alle" ? "on" : "") + "'>Alle Aufgaben</button></div>";
+      var html = "<div class='head'><h1>Aufgaben</h1><span class='grow'></span><button class='btn sec' data-act='history'>📜 Verlauf</button><button class='btn' data-act='edit' data-col='routines'>＋ Routine</button><button class='btn' data-act='edit' data-col='tasks'>＋ Aufgabe</button></div>";
+      html += "<div class='tabs'>" + [["routinen", "Routinen heute"], ["heute", "Aufgaben heute"], ["alle", "Alle verwalten"]].map((x) => "<button data-act='tasktab' data-v='" + x[0] + "' class='" + (tab === x[0] ? "on" : "") + "'>" + x[1] + "</button>").join("") + "</div>";
       if (tab === "routinen") {
         var h = new Date().getHours();
         var nowSlot = h < 11 ? "morgen" : h < 16 ? "mittag" : "abend";
-        var rs = st.routines.slice().sort((a, b) => (a.time === nowSlot ? -1 : 0) - (b.time === nowSlot ? -1 : 0));
+        var order = { morgen: 0, mittag: 1, abend: 2 };
+        var rs = st.routines.filter((r) => Logic.routineToday(r)).sort((a, b) => (a.time === nowSlot ? -1 : 0) - (b.time === nowSlot ? -1 : 0) || order[a.time] - order[b.time]);
         html += "<div class='routines'>" + (rs.map((r) => {
-          var p = this.person(r.person) || { name: "?", color: "#999" };
-          var ts = st.tasks.filter((x) => x.routine === r.id && (Logic.taskDue(x) || Logic.taskDoneToday(x)));
-          var done = ts.filter(Logic.taskDoneToday).length;
-          return "<div class='card' style='border-top:6px solid " + esc(p.color) + "'><div class='row' style='margin-bottom:10px'>" + this.av(p, "s") + "<b style='font-size:17px'>" + esc(p.name) + " · " + esc(r.icon || "") + " " + esc(r.name) + "</b><span class='grow' style='flex:1'></span><span class='muted small'>" + done + "/" + ts.length + "</span><button class='btn sec sm' data-act='edit' data-col='routines' data-id='" + r.id + "'>✏️</button></div>" +
-            "<div class='tiles'>" + (ts.map((x) => { var dn = Logic.taskDoneToday(x); return "<button class='tile " + (dn ? "done" : "") + "' data-act='" + (dn ? "undo" : "done") + "' data-id='" + x.id + "' data-p='" + r.person + "'><span class='ic'>" + esc(x.icon || "•") + "</span>" + esc(x.name) + (x.points ? "<span class='pt'>⭐ " + x.points + "</span>" : "") + "</button>"; }).join("") || "<div class='empty'>Heute nichts zu tun</div>") + "</div></div>";
-        }).join("") || "<div class='card empty'>Noch keine Routinen. Lege mit „＋ Routine“ eine an und ordne ihr Aufgaben zu.</div>") + "</div>";
+          var steps = r.steps || [];
+          var people = (r.persons || []).map((id) => this.person(id)).filter(Boolean);
+          return "<div class='card'><div class='row' style='margin-bottom:4px'><span style='font-size:28px'>" + esc(r.icon || "•") + "</span><div style='flex:1'><b style='font-size:17px'>" + esc(r.name) + "</b><div class='small muted'>" + ((TIMES.filter((x) => x[0] === r.time)[0] || ["", ""])[1]) + " · " + daysText(r.days) + "</div></div><button class='btn sec sm' data-act='edit' data-col='routines' data-id='" + r.id + "'>✏️</button></div>" +
+            (people.map((p) => {
+              var done = Logic.routineDone(r, p.id), pr = Logic.routineProgress(r, p.id);
+              var tiles = steps.length
+                ? steps.map((x) => { var dn = done.indexOf(x.id) >= 0; return "<button class='tile " + (dn ? "done" : "") + "' data-act='rstep' data-r='" + r.id + "' data-p='" + p.id + "' data-s='" + esc(x.id) + "'><span class='ic'>" + esc(x.icon || "•") + "</span>" + esc(x.name) + (x.points ? "<span class='pt'>⭐ " + x.points + "</span>" : "") + "</button>"; }).join("")
+                : (function (dn) { return "<button class='tile " + (dn ? "done" : "") + "' data-act='rstep' data-r='" + r.id + "' data-p='" + p.id + "' data-s='*'><span class='ic'>" + esc(r.icon || "✅") + "</span>Erledigt" + (r.points ? "<span class='pt'>⭐ " + r.points + "</span>" : "") + "</button>"; })(done.indexOf("*") >= 0);
+              return "<div class='rperson'><div class='row'>" + this.av(p, "s") + "<b>" + esc(p.name) + "</b><span style='flex:1'></span><span class='small' style='color:" + (pr[0] === pr[1] ? "var(--ok)" : "var(--muted)") + "'>" + pr[0] + "/" + pr[1] + (pr[0] === pr[1] ? " ✓" : "") + "</span></div><div class='tiles'>" + tiles + "</div></div>";
+            }).join("") || "<div class='empty'>Keine Person zugeteilt</div>") + "</div>";
+        }).join("") || "<div class='card empty'>Heute stehen keine Routinen an. Mit „＋ Routine“ legst du eine an, zum Beispiel „Morgenroutine“ mit den Schritten Zähne putzen, Anziehen, Bett machen.</div>") + "</div>";
       } else if (tab === "heute") {
         html += "<div class='people'>" + st.persons.map((p) => {
-          var ts = st.tasks.filter((x) => !x.routine && Logic.taskPerson(x) === p.id && (Logic.taskDue(x) || Logic.taskDoneToday(x)));
+          var ts = st.tasks.filter((x) => Logic.taskToday(x, p.id));
           return "<div class='pcol'><div class='ph' style='background:" + esc(p.color) + ";color:" + textOn(p.color) + "'>" + this.av(p, "s") + "<span class='pname'>" + esc(p.name) + "</span></div><div class='pb'>" + (ts.map((x) => this._taskRow(x, p.id)).join("") || "<div class='empty'>Nichts fällig 🎉</div>") + "</div></div>";
         }).join("") + "</div>";
       } else {
-        html += "<div class='card'><div class='list'>" + (st.tasks.map((x) => {
-          var r = st.routines.filter((y) => y.id === x.routine)[0];
-          return "<div class='task'><span class='ic'>" + esc(x.icon || "•") + "</span><span class='nm'><b>" + esc(x.name) + "</b><br><span class='small muted'>" + esc(Logic.repeatText(x.repeat)) + " · " + (x.persons || []).map((id) => esc((this.person(id) || {}).name || "?")).join(x.rotate ? " ↻ " : ", ") + (r ? " · Routine " + esc(r.name) : "") + (x.points ? " · ⭐" + x.points : "") + (x.needs_approval ? " · mit Bestätigung" : "") + "</span></span><button class='btn sec sm' data-act='edit' data-col='tasks' data-id='" + x.id + "'>✏️</button></div>";
-        }).join("") || "<div class='empty'>Noch keine Aufgaben</div>") + "</div></div>";
+        var names = (ids, sep) => (ids || []).map((id) => esc((this.person(id) || {}).name || "?")).join(sep || ", ");
+        html += "<div class='card' style='margin-bottom:14px'><h3>🔁 Routinen</h3><div class='list'>" + (st.routines.map((r) => "<div class='task'><span class='ic'>" + esc(r.icon || "•") + "</span><span class='nm'><b>" + esc(r.name) + "</b><br><span class='small muted'>" + ((TIMES.filter((x) => x[0] === r.time)[0] || ["", ""])[1]) + " · " + daysText(r.days) + " · " + names(r.persons) + " · " + ((r.steps || []).length ? (r.steps.length + " Schritte") : "ohne Schritte") + (r.needs_approval ? " · mit Bestätigung" : "") + "</span></span><button class='btn sec sm' data-act='edit' data-col='routines' data-id='" + r.id + "'>✏️</button></div>").join("") || "<div class='empty'>Noch keine Routinen</div>") + "</div></div>";
+        html += "<div class='card'><h3>🧹 Aufgaben</h3><div class='list'>" + (st.tasks.map((x) => "<div class='task'><span class='ic'>" + esc(x.icon || "•") + "</span><span class='nm'><b>" + esc(x.name) + "</b><br><span class='small muted'>" + esc(Logic.repeatText(x.repeat)) + " · " + names(x.persons, Logic.taskMode(x) === "reihum" ? " ↻ " : ", ") + " · " + Logic.modeText(x.mode) + (x.points ? " · ⭐" + x.points : "") + (x.needs_approval ? " · mit Bestätigung" : "") + "</span></span><button class='btn sec sm' data-act='edit' data-col='tasks' data-id='" + x.id + "'>✏️</button></div>").join("") || "<div class='empty'>Noch keine Aufgaben</div>") + "</div></div>";
       }
       return html;
     }
@@ -838,7 +916,9 @@ label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--mu
         case "mealweek": this.sub.mealWeek = Number(v); this.render(); break;
         case "pp": this.sub.pp = v; this.render(); break;
         case "done": this._complete(id, el.getAttribute("data-p")); break;
-        case "undo": this._keepScroll = true; this.act("undo_task", { task: id }); break;
+        case "undo": this._keepScroll = true; this.act("undo_task", { task: id, person: el.getAttribute("data-p") }); break;
+        case "rstep": this._routineStep(el.getAttribute("data-r"), el.getAttribute("data-p"), el.getAttribute("data-s"), el.classList.contains("done") || el.classList.contains("on")); break;
+        case "calfilter": { var hh = this._calHidden(); hh[v] = !hh[v]; try { localStorage.setItem("fz_cal_hidden", JSON.stringify(hh)); } catch (e2) { /* egal */ } this.render(); break; }
         case "redeem": this._redeem(id, el.getAttribute("data-p")); break;
         case "approve": this.pin(() => this.act("approve", { id: id }).then(() => this.toast("✓ Bestätigt"))); break;
         case "reject": this.pin(() => this.act("reject", { id: id })); break;
@@ -885,6 +965,14 @@ label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--mu
       if (pid) return go(pid);
       this._who("Wer hat's gemacht?", task.persons, go);
     }
+    _routineStep(rid, pid, sid, isDone) {
+      var r = this.state.routines.filter((x) => x.id === rid)[0];
+      if (!r) return;
+      this._keepScroll = true;
+      if (isDone) return this.act("undo_step", { routine: rid, person: pid, step: sid });
+      var step = (r.steps || []).filter((x) => x.id === sid)[0];
+      this.act("complete_step", { routine: rid, person: pid, step: sid }).then(() => this.lob(pid, { points: Number((step || r).points) || 0, needs_approval: r.needs_approval }));
+    }
     _redeem(rid, pid) {
       var r = this.state.rewards.filter((x) => x.id === rid)[0], p = this.person(pid);
       this.dialog("🎁 " + esc(r.name), "<p>" + esc(p.name) + " löst <b>" + esc(r.name) + "</b> für <b>⭐ " + r.cost + "</b> ein." + (r.needs_approval ? "<br><span class='muted'>Ein Elternteil muss das noch bestätigen.</span>" : "") + "</p>",
@@ -910,29 +998,33 @@ label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--mu
           { k: "calendar", l: "Eigener Kalender (optional)", t: "select", o: [["", "– keiner –"]].concat((st.calendar_list || []).map((o) => [o.entity_id, o.name])) }
         ], def: { color: "#6c5ce7", role: "kind", points_enabled: true } },
         tasks: { title: "Aufgabe", fields: [
-          { k: "name", l: "Name", t: "text" }, { k: "icon", l: "Symbol (Emoji)", t: "text" },
-          { k: "persons", l: "Wer?", t: "persons" }, { k: "rotate", l: "Reihum wechseln", t: "toggle" },
-          { k: "routine", l: "Gehört zur Routine", t: "select", o: [["", "– keine –"]].concat(st.routines.map((r) => [r.id, ((this.person(r.person) || {}).name || "?") + ": " + r.name])) },
-          { k: "repeat", l: "Wiederholung", t: "repeat" },
+          { k: "name", l: "Name", t: "text" }, { k: "icon", l: "Symbol", t: "icon" },
+          { k: "persons", l: "Wer?", t: "persons" },
+          { k: "mode", l: "Bei mehreren Personen", t: "select", o: [["jeder", "Jeder erledigt sie für sich"], ["gemeinsam", "Einer für alle (wer zuerst kommt)"], ["reihum", "Reihum, jedes Mal jemand anderes"]] },
+          { k: "repeat", l: "Wann?", t: "repeat" },
           { k: "points", l: "Punkte", t: "number" }, { k: "needs_approval", l: "Punkte erst nach Bestätigung durch Eltern", t: "toggle" },
           { k: "room", l: "Raum (optional)", t: "text" }
-        ], def: { icon: "✨", persons: [], points: 1, repeat: { type: "daily" } } },
+        ], def: { icon: "✨", persons: [], mode: "jeder", points: 1, repeat: { type: "daily" } } },
         routines: { title: "Routine", fields: [
-          { k: "name", l: "Name", t: "text" }, { k: "icon", l: "Symbol", t: "text" },
-          { k: "person", l: "Für", t: "select", o: personOpts }, { k: "time", l: "Tageszeit", t: "select", o: TIMES }
-        ], def: { icon: "🌅", time: "morgen", person: (st.persons.filter((p) => p.role === "kind")[0] || st.persons[0] || {}).id } },
+          { k: "name", l: "Name", t: "text" }, { k: "icon", l: "Symbol", t: "icon" },
+          { k: "persons", l: "Für wen?", t: "persons" }, { k: "time", l: "Tageszeit", t: "select", o: TIMES },
+          { k: "days", l: "An welchen Tagen? (keiner gewählt = täglich)", t: "days" },
+          { k: "steps", l: "Schritte (jede Person hakt sie für sich ab)", t: "steps" },
+          { k: "points", l: "Punkte, wenn die Routine keine Schritte hat", t: "number" },
+          { k: "needs_approval", l: "Punkte erst nach Bestätigung durch Eltern", t: "toggle" }
+        ], def: { icon: "🌅", time: "morgen", days: [], steps: [], points: 1, persons: st.persons.filter((p) => p.role === "kind").map((p) => p.id) } },
         rewards: { title: "Belohnung", fields: [
-          { k: "name", l: "Name", t: "text" }, { k: "icon", l: "Symbol", t: "text" }, { k: "cost", l: "Preis in Punkten", t: "number" },
+          { k: "name", l: "Name", t: "text" }, { k: "icon", l: "Symbol", t: "icon" }, { k: "cost", l: "Preis in Punkten", t: "number" },
           { k: "needs_approval", l: "Eltern müssen bestätigen", t: "toggle" }
         ], def: { icon: "🎁", cost: 20, needs_approval: true } },
         maintenance: { title: "Wartung", fields: [
-          { k: "name", l: "Name", t: "text" }, { k: "icon", l: "Symbol", t: "text" },
+          { k: "name", l: "Name", t: "text" }, { k: "icon", l: "Symbol", t: "icon" },
           { k: "every", l: "Wiederholen alle", t: "number" }, { k: "unit", l: "Einheit", t: "select", o: UNITS },
           { k: "warn_days", l: "Vorwarnung (Tage vorher)", t: "number" }, { k: "next", l: "Nächster Termin", t: "date" },
           { k: "note", l: "Notiz", t: "textarea" }
         ], def: { icon: "🔧", every: 1, unit: "jahre", warn_days: 14, next: todayIso() } },
         waste: { title: "Müllart", fields: [
-          { k: "name", l: "Name", t: "text" }, { k: "icon", l: "Symbol", t: "text" }, { k: "color", l: "Farbe", t: "color" },
+          { k: "name", l: "Name", t: "text" }, { k: "icon", l: "Symbol", t: "icon" }, { k: "color", l: "Farbe", t: "color" },
           { k: "rule.weekday", l: "Wochentag", t: "select", o: WD_LANG.map((w, i) => [String(i), w]) },
           { k: "rule.every_weeks", l: "Alle … Wochen", t: "number" }, { k: "rule.start", l: "Erster Termin (für den Rhythmus)", t: "date" },
           { k: "extra_dates", l: "Zusätzliche Daten (JJJJ-MM-TT, kommagetrennt)", t: "dates" },
@@ -946,7 +1038,8 @@ label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--mu
         if (col === "waste") { it.rule = it.rule || {}; it.rule.type = "weekly"; it.rule.weekday = Number(it.rule.weekday); it.rule.every_weeks = Number(it.rule.every_weeks) || 1; }
         if (col === "maintenance") { it.every = Number(it.every) || 1; it.warn_days = Number(it.warn_days) || 0; }
         if (col === "rewards") it.cost = Number(it.cost) || 0;
-        if (col === "tasks") { it.points = Number(it.points) || 0; if (!it.routine) it.routine = null; }
+        if (col === "tasks") { it.points = Number(it.points) || 0; it.done = it.done || {}; delete it.routine; delete it.rotate; }
+        if (col === "routines") { it.points = Number(it.points) || 0; it.done = it.done || {}; delete it.person; }
         return this.act("save_item", { collection: col, item: it });
       }, id ? () => this.dialog("Löschen?", "<p>„" + esc(item.name) + "“ wirklich löschen?</p>", [["Abbrechen", "sec"], ["Löschen", "bad", () => this.act("delete_item", { collection: col, id: id })]]) : null);
       // Personen, Belohnungen und Wartung ändern nur Erwachsene
@@ -968,6 +1061,9 @@ label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--mu
         if (f.t === "dates") return "<label class='f'>" + esc(f.l) + "<input " + name + " data-t='dates' value='" + esc((v || []).join(", ")) + "'></label>";
         if (f.t === "photo") return "<label class='f'>" + esc(f.l) + "<input type='file' accept='image/*' " + name + " data-t='photo'></label>";
         if (f.t === "persons") return "<div class='f'><span class='small muted'><b>" + esc(f.l) + "</b></span><div class='who'>" + this.state.persons.map((p) => "<label style='display:flex;align-items:center;gap:8px;background:var(--bg);padding:8px;border-radius:12px'><input type='checkbox' data-k='" + f.k + "' data-t='persons' value='" + p.id + "'" + ((v || []).indexOf(p.id) >= 0 ? " checked" : "") + ">" + this.av(p, "s") + esc(p.name) + "</label>").join("") + "</div></div>";
+        if (f.t === "icon") return "<div class='f'><span class='small muted'><b>" + esc(f.l) + "</b></span><div class='row'><button type='button' class='iconbtn' data-iconbtn>" + esc(v || "✨") + "</button><input " + name + " data-t='icon' value='" + esc(v || "") + "' style='width:90px' placeholder='Emoji'><span class='small muted'>antippen zum Auswählen</span></div></div>";
+        if (f.t === "days") return "<div class='f'><span class='small muted'><b>" + esc(f.l) + "</b></span><div class='days' data-days='" + f.k + "'>" + WD.map((w, i) => "<button type='button' data-wd='" + i + "' class='" + ((v || []).map(Number).indexOf(i) >= 0 ? "on" : "") + "'>" + w + "</button>").join("") + "</div></div>";
+        if (f.t === "steps") return "<div class='f'><span class='small muted'><b>" + esc(f.l) + "</b></span><div data-steps='" + f.k + "'>" + (v || []).map((x) => this._stepRow(x)).join("") + "</div><button type='button' class='btn sec sm' data-addstep style='align-self:flex-start'>＋ Schritt</button></div>";
         if (f.t === "repeat") {
           var r = v || { type: "daily" };
           return "<div class='f'><span class='small muted'><b>" + esc(f.l) + "</b></span><select data-k='repeat.type' data-t='rtype'>" + [["daily", "täglich"], ["weekly", "an Wochentagen"], ["interval", "alle X Tage/Wochen/Monate"], ["once", "einmalig"]].map((o) => "<option value='" + o[0] + "'" + (r.type === o[0] ? " selected" : "") + ">" + o[1] + "</option>").join("") + "</select>" +
@@ -985,6 +1081,7 @@ label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--mu
           var k = inp.getAttribute("data-k"), t = inp.getAttribute("data-t");
           if (t === "persons") return;
           if (t === "photo") return;
+          if (inp.closest(".steprow")) return;
           if (inp.type === "checkbox") set(state, k, inp.checked);
           else if (t === "dates") set(state, k, inp.value.split(",").map((x) => x.trim()).filter(Boolean));
           else if (inp.type === "number") set(state, k, inp.value === "" ? null : Number(inp.value));
@@ -994,6 +1091,13 @@ label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--mu
         if (pk) set(state, pk.getAttribute("data-k"), Array.prototype.map.call(dlg.querySelectorAll("[data-t=persons]:checked"), (x) => x.value));
         if (state.repeat && state.repeat.type === "weekly") state.repeat.days = Array.prototype.map.call(dlg.querySelectorAll("[data-day].on"), (b) => Number(b.getAttribute("data-day")));
         if (state.repeat && state.repeat.type === "interval" && !state.repeat.start) state.repeat.start = todayIso();
+        dlg.querySelectorAll("[data-days]").forEach((box) => set(state, box.getAttribute("data-days"), Array.prototype.map.call(box.querySelectorAll("[data-wd].on"), (b) => Number(b.getAttribute("data-wd")))));
+        dlg.querySelectorAll("[data-steps]").forEach((box) => set(state, box.getAttribute("data-steps"), Array.prototype.map.call(box.querySelectorAll(".steprow"), (row) => ({
+          id: row.getAttribute("data-sid") || uid(),
+          icon: row.querySelector("[data-st=icon]").value,
+          name: row.querySelector("[data-st=name]").value.trim(),
+          points: Number(row.querySelector("[data-st=points]").value) || 0
+        })).filter((x) => x.name)));
         if (state._photo) { state.photo = state._photo; delete state._photo; }
         return onSave(state);
       }]);
@@ -1004,7 +1108,39 @@ label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--mu
         if (e.target.getAttribute("data-t") === "rtype") sync();
         if (e.target.getAttribute("data-t") === "photo" && e.target.files[0]) this._readPhoto(e.target.files[0]).then((u) => { state._photo = u; });
       });
-      dlg.addEventListener("click", (e) => { var b = e.target.closest("[data-day]"); if (b) b.classList.toggle("on"); });
+      dlg.addEventListener("click", (e) => {
+        var b = e.target.closest("[data-day],[data-wd]"); if (b) { b.classList.toggle("on"); return; }
+        if (e.target.closest("[data-addstep]")) {
+          var box = e.target.closest(".f").querySelector("[data-steps]");
+          box.insertAdjacentHTML("beforeend", this._stepRow({ icon: "✨", name: "", points: 1 }));
+          var inp = box.lastElementChild.querySelector("[data-st=name]"); if (inp) inp.focus();
+          return;
+        }
+        var del = e.target.closest("[data-delstep]"); if (del) { del.closest(".steprow").remove(); return; }
+        var ib = e.target.closest("[data-iconbtn]");
+        if (ib) {
+          var old = dlg.querySelector(".igrid");
+          var same = old && old.__for === ib;
+          if (old) old.remove();
+          if (same) return;
+          var grid = document.createElement("div"); grid.className = "igrid"; grid.__for = ib;
+          grid.innerHTML = ICONS.map((g) => "<div class='ig'>" + esc(g[0]) + "</div>" + g[1].map((ic) => "<button type='button' data-emoji='" + ic + "'>" + ic + "</button>").join("")).join("");
+          (ib.closest(".steprow") || ib.closest(".f")).insertAdjacentElement("afterend", grid);
+          return;
+        }
+        var em = e.target.closest("[data-emoji]");
+        if (em) {
+          var g2 = em.closest(".igrid"), tgt = g2.__for, val = em.getAttribute("data-emoji");
+          tgt.textContent = val;
+          var hold = tgt.parentNode.querySelector("[data-t=icon],[data-st=icon]"); if (hold) hold.value = val;
+          g2.remove();
+        }
+      });
+      dlg.addEventListener("input", (e) => { if (e.target.getAttribute("data-t") === "icon") { var bb = e.target.parentNode.querySelector("[data-iconbtn]"); if (bb) bb.textContent = e.target.value || "✨"; } });
+    }
+
+    _stepRow(x) {
+      return "<div class='steprow' data-sid='" + esc(x.id || "") + "'><button type='button' class='iconbtn' data-iconbtn>" + esc(x.icon || "✨") + "</button><input type='hidden' data-st='icon' value='" + esc(x.icon || "✨") + "'><input data-st='name' placeholder='z. B. Zähne putzen' value='" + esc(x.name || "") + "'><input type='number' min='0' data-st='points' title='Punkte' value='" + esc(x.points == null ? 1 : x.points) + "'><button type='button' class='btn sec sm' data-delstep title='Schritt entfernen'>✕</button></div>";
     }
 
     _readPhoto(file) {

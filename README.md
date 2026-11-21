@@ -14,13 +14,14 @@ Ein Familienplaner als eigenes Panel in Home Assistant, für das Wand-Tablet und
 Alles wird in der Oberfläche eingestellt. Es gibt kein YAML.
 
 ## Status
-In Entwicklung (Version 0.2.0).
+In Entwicklung (Version 0.3.0).
 
 | Teil | Stand |
 |---|---|
 | Personen, Einstellungen, Eltern-PIN | fertig |
 | Kalender (HA-Kalender lesen, Termine anlegen und löschen) | fertig |
-| Aufgaben, Routinen, Punkte, Belohnungen, Verlauf | fertig |
+| Routinen (mehrere Personen, Wochentage, Schritte), Aufgaben (jeder / einer für alle / reihum), Punkte, Belohnungen, Verlauf | fertig |
+| Symbolauswahl, Kalender nach Personen filtern | fertig |
 | Wartung, Müll (Anzeige und Erfassung) | fertig |
 | Einkauf über eine To-do-Liste (z. B. Bring) | fertig |
 | Essensplan mit Mealie (Rezeptsuche, Plan, Zutaten) | folgt |

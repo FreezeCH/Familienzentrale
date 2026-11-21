@@ -21,25 +21,62 @@ def test_add_interval():
 
 
 def test_task_due():
-    assert logic.task_due({"repeat": {"type": "daily"}}, D)
-    assert not logic.task_due({"repeat": {"type": "daily"}, "last_done": "2026-11-21"}, D)
-    assert logic.task_due({"repeat": {"type": "weekly", "days": [5]}}, D)  # Samstag
-    assert not logic.task_due({"repeat": {"type": "weekly", "days": [0, 1]}}, D)
-    t = {"repeat": {"type": "interval", "every": 3, "unit": "tage"}, "last_done": "2026-11-19"}
-    assert not logic.task_due(t, D)
-    t["last_done"] = "2026-11-18"
-    assert logic.task_due(t, D)
-    assert logic.task_due({"repeat": {"type": "interval", "every": 3, "unit": "tage", "start": "2026-11-21"}}, D)
-    assert not logic.task_due({"repeat": {"type": "interval", "every": 3, "unit": "tage", "start": "2026-11-22"}}, D)
-    assert logic.task_due({"repeat": {"type": "once", "date": "2026-11-20"}}, D)
-    assert not logic.task_due({"repeat": {"type": "once", "date": "2026-11-20"}, "last_done": "2026-11-20"}, D)
+    assert logic.task_due_for({"repeat": {"type": "daily"}}, "a", D)
+    assert not logic.task_due_for({"repeat": {"type": "daily"}, "done": {"a": "2026-11-21"}}, "a", D)
+    assert logic.task_due_for({"repeat": {"type": "weekly", "days": [5]}}, "a", D)  # Samstag
+    assert not logic.task_due_for({"repeat": {"type": "weekly", "days": [0, 1]}}, "a", D)
+    t = {"repeat": {"type": "interval", "every": 3, "unit": "tage"}, "done": {"a": "2026-11-19"}}
+    assert not logic.task_due_for(t, "a", D)
+    t["done"]["a"] = "2026-11-18"
+    assert logic.task_due_for(t, "a", D)
+    assert logic.task_due_for({"repeat": {"type": "interval", "every": 3, "unit": "tage", "start": "2026-11-21"}}, "a", D)
+    assert not logic.task_due_for({"repeat": {"type": "interval", "every": 3, "unit": "tage", "start": "2026-11-22"}}, "a", D)
+    assert logic.task_due_for({"repeat": {"type": "once", "date": "2026-11-20"}}, "a", D)
+    assert not logic.task_due_for({"repeat": {"type": "once", "date": "2026-11-20"}, "done": {"a": "2026-11-20"}}, "a", D)
 
 
-def test_rotation_and_person():
-    t = {"persons": ["a", "b"], "rotate": True, "rotate_index": 3}
-    assert logic.task_person(t, D) == "b"
-    t.update(last_done="2026-11-21", last_by="a")
-    assert logic.task_person(t, D) == "a"
+def test_modes():
+    jeder = {"persons": ["a", "b"], "mode": "jeder", "repeat": {"type": "daily"}, "done": {"a": "2026-11-21"}}
+    assert not logic.task_due_for(jeder, "a", D) and logic.task_due_for(jeder, "b", D)
+    gem = {"persons": ["a", "b"], "mode": "gemeinsam", "repeat": {"type": "daily"}, "done": {"*": "2026-11-21"}}
+    assert not logic.task_due_for(gem, "a", D) and not logic.task_due_for(gem, "b", D)
+    assert logic.task_assignees(gem, D) == ["a", "b"]
+
+
+def test_rotation():
+    t = {"persons": ["a", "b"], "mode": "reihum", "rotate_index": 3, "repeat": {"type": "daily"}}
+    assert logic.task_assignees(t, D) == ["b"]
+    t.update(done={"*": "2026-11-21"}, last_by="a", rotate_index=4)
+    assert logic.task_assignees(t, D) == ["a"]
+
+
+def test_routines():
+    r = {"persons": ["a", "b"], "days": [5], "steps": [{"id": "s1"}, {"id": "s2"}], "done": {"a": {"date": "2026-11-21", "steps": ["s1"]}, "b": {"date": "2026-11-20", "steps": ["s1", "s2"]}}}
+    assert logic.routine_today(r, D) and not logic.routine_today(r, date(2026, 11, 22))
+    assert logic.routine_progress(r, "a", D) == (1, 2)
+    assert logic.routine_progress(r, "b", D) == (0, 2)
+    leer = {"persons": ["a"], "steps": [], "done": {"a": {"date": "2026-11-21", "steps": ["*"]}}}
+    assert logic.routine_progress(leer, "a", D) == (1, 1)
+    data = {"tasks": [{"persons": ["a"], "repeat": {"type": "daily"}}], "routines": [r]}
+    assert logic.open_tasks(data, "a", D) == 2
+
+
+def test_migrate():
+    data = {
+        "routines": [{"id": "r1", "name": "Abend", "person": "k", "time": "abend"}],
+        "tasks": [
+            {"id": "t1", "name": "Zähne", "routine": "r1", "points": 1, "persons": ["k"], "repeat": {"type": "daily"}},
+            {"id": "t2", "name": "Tisch", "persons": ["k", "j"], "rotate": True, "last_done": "2026-11-21", "repeat": {"type": "daily"}},
+            {"id": "t3", "name": "Bad", "persons": ["m"], "last_done": "2026-11-20", "repeat": {"type": "daily"}},
+        ],
+    }
+    assert logic.migrate(data)
+    r = data["routines"][0]
+    assert r["persons"] == ["k"] and r["steps"][0]["name"] == "Zähne" and r["days"] == []
+    assert [t["id"] for t in data["tasks"]] == ["t2", "t3"]
+    assert data["tasks"][0]["mode"] == "reihum" and data["tasks"][0]["done"] == {"*": "2026-11-21"}
+    assert data["tasks"][1]["mode"] == "jeder" and data["tasks"][1]["done"] == {"m": "2026-11-20"}
+    assert not logic.migrate(data)
 
 
 def test_points():
