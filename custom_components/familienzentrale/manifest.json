@@ -1,0 +1,15 @@
+{
+  "domain": "familienzentrale",
+  "name": "Familienzentrale",
+  "codeowners": ["@FreezeCH"],
+  "config_flow": true,
+  "dependencies": ["http", "frontend", "panel_custom", "websocket_api"],
+  "after_dependencies": ["calendar", "todo", "mealie", "media_source"],
+  "documentation": "https://github.com/FreezeCH/Familienzentrale",
+  "issue_tracker": "https://github.com/FreezeCH/Familienzentrale/issues",
+  "iot_class": "local_push",
+  "integration_type": "service",
+  "requirements": [],
+  "single_config_entry": true,
+  "version": "0.1.0"
+}
