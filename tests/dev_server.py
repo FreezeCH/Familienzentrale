@@ -27,6 +27,7 @@ pkg = types.ModuleType("fz")
 pkg.__path__ = [str(ROOT / "custom_components" / "familienzentrale")]
 sys.modules["fz"] = pkg
 hub_mod = importlib.import_module("fz.hub")
+photos_mod = importlib.import_module("fz.photos")
 from homeassistant.exceptions import HomeAssistantError  # noqa: E402
 from homeassistant.helpers import storage as fake_storage  # noqa: E402
 
@@ -443,9 +444,27 @@ class FakeHass:
         self.services = Services(self)
         self.config_entries = ConfigEntries()
         self.mealie = FakeMealie()
+        self.config = types.SimpleNamespace(media_dirs={"local": str(make_media())})
 
     async def async_add_executor_job(self, func, *args):
         return func(*args)
+
+
+def make_media() -> Path:
+    """Beispielfotos für den Bilderrahmen (werden einmal erzeugt, nicht im Repository)."""
+    folder = ROOT / "tests" / "media" / "Bilder"
+    if not (folder / "urlaub").is_dir():
+        from PIL import Image, ImageDraw
+
+        (folder / "urlaub").mkdir(parents=True, exist_ok=True)
+        for i, (c1, c2, size) in enumerate([("#ff9a9e", "#fad0c4", (3000, 2000)), ("#84fab0", "#8fd3f4", (2000, 3000)), ("#a18cd1", "#fbc2eb", (2400, 1800))]):
+            img = Image.new("RGB", size, c1)
+            d = ImageDraw.Draw(img)
+            d.ellipse([size[0] // 4, size[1] // 4, size[0] * 3 // 4, size[1] * 3 // 4], fill=c2)
+            d.text((40, 40), f"Testfoto {i + 1}", fill="#000")
+            img.save(folder / ("urlaub" if i else "") / f"foto{i + 1}.jpg", quality=85)
+        (folder / "notiz.txt").write_text("kein Bild", encoding="utf-8")
+    return folder.parent
 
 
 def build():
@@ -517,6 +536,19 @@ class Handler(SimpleHTTPRequestHandler):
     def do_GET(self):
         if self.path.startswith("/api/debug"):
             return self._json(200, debug())
+        if self.path.startswith("/api/familienzentrale/foto/"):
+            idx = self.path.split("/")[-1].split("?")[0]
+            path = HUB.photos.path(int(idx)) if idx.isdigit() else None
+            if not path:
+                self.send_error(404)
+                return
+            data = photos_mod.shrink(path)
+            self.send_response(200)
+            self.send_header("Content-Type", "image/jpeg")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
         return super().do_GET()
 
     def do_POST(self):

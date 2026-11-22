@@ -65,7 +65,16 @@ ansicht: einkauf           # optional: Bereich beim Öffnen; auch über #einkauf
 type: custom:familienzentrale-heute-card
 stil: wand
 ziel: /mein-dashboard/familie    # Seite mit der ganzen Familienzentrale
+ruhebild: true             # optional: Fotos über das ganze Dashboard, wenn niemand bedient
+
+# Bilderrahmen: Fotos mit Uhr (z. B. als Nachtansicht)
+type: custom:familienzentrale-rahmen-card
+abdunkeln: 0.4             # dunkler Schleier 0 – 0.9
+anpassen: contain          # contain = ganzes Foto, cover = Fläche füllen
+timer: timer.mein_timer    # optional: Antippen startet diesen Timer
 ```
+
+Fotos: In HA einen Netzwerkspeicher mit Verwendung „Medien“ einbinden (oder Fotos unter `/media` ablegen) und in der Familienzentrale unter Einstellungen → Bilderrahmen den Ordnernamen eintragen, z. B. `Bilder`. Die Fotos werden auf höchstens 1600 Pixel verkleinert ausgeliefert. HEIC wird nicht unterstützt.
 
 ## Tests
 - `python tests/test_logic.py`: Fachlogik (Fälligkeit, Routinen, Punkte, Müll, Datenübernahme)

@@ -23,6 +23,7 @@ from .ingredients import norm
 from .mealie import MealieBridge
 from .rrule import for_platform as rrule_for_platform
 from . import caldav_edit
+from . import photos
 from .const import (
     CAL_DAYS_AHEAD,
     CAL_DAYS_BACK,
@@ -130,6 +131,7 @@ class FamilienzentraleHub:
         # Kürzlich an die Einkaufsliste geschickte Artikel. Bring meldet neue Einträge
         # erst mit Verzögerung zurück; so entstehen bei mehrfachem Senden keine Doppel.
         self._recent_added: dict[str, float] = {}
+        self.photos = photos.PhotoLibrary()
         # Termine zwischenspeichern: Kalender (z. B. Google) nicht bei jeder Aktion neu abfragen
         self._events_cache: dict[str, Any] = {"ts": 0.0, "data": []}
 
@@ -797,13 +799,38 @@ class FamilienzentraleHub:
             return {"items": await self.mealie.async_ingredients(ids, d["settings"]["mealie"].get("servings"))}
 
         elif action == "frame_photo":
-            raise HomeAssistantError("Bilderrahmen folgt in Etappe 5")
+            return await self._async_frame_photo(int(data.get("index") or 0))
 
         else:
             raise HomeAssistantError(f"Unbekannte Aktion: {action}")
 
         self._changed()
         return result
+
+    # ---------- Bilderrahmen ----------
+    async def _async_frame_photo(self, index: int) -> dict[str, Any]:
+        """Signierte Adresse für das Foto Nummer index (läuft endlos im Kreis)."""
+        media_root = (getattr(self.hass.config, "media_dirs", None) or {}).get("local") or "/media"
+        setting = self.data["settings"].get("frame", {}).get("media")
+        folder = photos.folder_of(setting, media_root)
+        if folder is None:
+            raise HomeAssistantError("Bilderrahmen: bitte unter Einstellungen den Medienordner eintragen (z. B. Bilder)")
+        lib = self.photos
+        if lib.needs_scan(folder):
+            if not await self.hass.async_add_executor_job(folder.is_dir):
+                raise HomeAssistantError(f"Bilderrahmen: Ordner „{setting}“ nicht gefunden")
+            lib.set_files(folder, await self.hass.async_add_executor_job(photos.scan, folder))
+        if not lib.count:
+            raise HomeAssistantError(f"Bilderrahmen: keine Fotos in „{setting}“")
+        i = index % lib.count
+        return {"url": self._sign(f"/api/familienzentrale/foto/{i}?g={lib.generation}"), "count": lib.count, "album": lib.name(i)}
+
+    def _sign(self, path: str) -> str:
+        try:
+            from homeassistant.components.http.auth import async_sign_path
+        except ImportError:  # Testumgebung
+            return path
+        return async_sign_path(self.hass, path, timedelta(minutes=30))
 
     @callback
     def invalidate_events(self) -> None:

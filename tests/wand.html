@@ -18,6 +18,7 @@
 </head>
 <body>
 <div id="start">
+  <div class="slot" id="nachtslot" style="grid-column:1 / span 2;height:440px" hidden></div>
   <div class="fake" style="height:480px">Energie (Platzhalter)</div>
   <div class="slot" id="heuteslot"></div>
 </div>
@@ -26,6 +27,7 @@
 <script>
   var fakeHass = {
     states: {},
+    callService: function (d, s, data) { (window.__services = window.__services || []).push([d, s, data]); return Promise.resolve(); },
     callWS: function (msg) {
       return fetch("/api/ws", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(msg) })
         .then(function (r) { return r.json(); })
@@ -34,7 +36,15 @@
     connection: { subscribeMessage: function () { return Promise.reject(new Error("kein Abo im Test")); } }
   };
   var heute = document.createElement("familienzentrale-heute-card");
-  heute.setConfig({ stil: "wand", ziel: "/tests/wand.html/familie" });
+  heute.setConfig({ stil: "wand", ziel: "/tests/wand.html/familie", ruhebild: true, ruhebild_minuten: Number(new URLSearchParams(location.search).get("ruhe") || 3) });
+  // Nachtkarte mit Fotos (?nacht=1)
+  if (new URLSearchParams(location.search).get("nacht")) {
+    var nacht = document.createElement("familienzentrale-rahmen-card");
+    nacht.setConfig({ abdunkeln: 0.4, timer: "timer.wand_nacht_geweckt" });
+    nacht.hass = fakeHass;
+    document.getElementById("nachtslot").hidden = false;
+    document.getElementById("nachtslot").appendChild(nacht);
+  }
   heute.hass = fakeHass;
   document.getElementById("heuteslot").appendChild(heute);
   var karte = document.createElement("familienzentrale-card");

@@ -8,7 +8,7 @@
  */
 (function () {
   "use strict";
-  var PANEL_VERSION = "0.6.0"; // muss zu const.py VERSION passen
+  var PANEL_VERSION = "0.7.0"; // muss zu const.py VERSION passen
 
   // ---------- Hilfsfunktionen ----------
   var pad = function (n) { return String(n).padStart(2, "0"); };
@@ -565,7 +565,7 @@
 :host{--bg:#f6f4fb;--card:#ffffff;--ink:#1d1b26;--muted:#6b6880;--line:#e6e2f0;--accent:#6c5cE7;--ok:#27ae60;--warn:#f39c12;--bad:#e74c3c;--rail:#ffffff;--shadow:0 2px 10px rgba(40,30,90,.07);\
 display:block;height:100%;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:var(--ink);background:var(--bg);-webkit-tap-highlight-color:transparent}\
 :host([data-theme=dunkel]){--bg:#15131f;--card:#211e30;--ink:#f1eff8;--muted:#a19cb8;--line:#332f47;--rail:#1b1829;--shadow:none}\
-*{box-sizing:border-box}button{font:inherit;color:inherit;cursor:pointer}\
+*{box-sizing:border-box}#root{height:100%}button{font:inherit;color:inherit;cursor:pointer}\
 .app{display:flex;height:var(--fz-hoehe,100vh)}\
 :host([data-stil=wand]){--bg:rgba(255,255,255,.05);--card:rgba(255,255,255,.07);--ink:#f1eff8;--muted:#a9a4c4;--line:rgba(255,255,255,.10);--rail:rgba(255,255,255,.04);--shadow:none;background:transparent}\
 :host([data-stil=wand]) .dlg,:host([data-stil=wand]) .lob div{background:#211e30}\
@@ -574,6 +574,15 @@ display:block;height:100%;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI
 :host([data-stil=wand]) .tabs button.on{color:#211e30}\
 :host([data-stil=wand]) .chk{background:rgba(255,255,255,.08)}\
 :host([data-stil=wand]) .rail button.back{color:var(--ink);background:rgba(255,255,255,.08)}\
+.rahmen{position:relative;height:100%;min-height:200px;background:#000;overflow:hidden;border-radius:18px;cursor:pointer}\
+:host([data-vollbild]) .rahmen{border-radius:0;height:100vh}\
+.rahmen .img{position:absolute;left:0;top:0;right:0;bottom:0;background:#000 center/contain no-repeat;opacity:0;transition:opacity 1.5s}\
+:host([data-anpassen=cover]) .rahmen .img{background-size:cover}\
+.rahmen .dim{position:absolute;left:0;top:0;right:0;bottom:0;background:#000;opacity:var(--fz-dim,0);pointer-events:none}\
+.rahmen .rc{position:absolute;left:28px;bottom:22px;display:flex;flex-direction:column;color:#fff;text-shadow:0 2px 12px rgba(0,0,0,.8);pointer-events:none}\
+.rahmen .rclock{font-size:72px;font-weight:300;line-height:1;letter-spacing:-2px}\
+.rahmen .rdate{font-size:17px;opacity:.85;margin-top:4px}\
+.rahmen .rmsg{font-size:13px;opacity:.75;margin-top:8px;max-width:520px}\
 .heute{height:100%;display:flex;flex-direction:column;gap:8px;padding:12px;overflow:hidden}\
 .heute .hh{display:flex;align-items:center;gap:8px;font-size:17px}\
 .heute .hh b{cursor:pointer}\
@@ -1137,7 +1146,7 @@ label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--mu
         "<div class='card set-sec'><h3>🔔 Benachrichtigungen</h3><div class='form'><label class='f'>Telegram (Notify-Aktion)<input data-chg='notify' data-k='telegram' placeholder='notify.telegram_familie' value='" + esc(s.notify.telegram) + "'></label><label class='f'>Sonos-Lautsprecher (kommagetrennt)<input data-chg='notifylist' data-k='sonos' placeholder='media_player.sonos_kuche' value='" + esc((s.notify.sonos || []).join(", ")) + "'></label>" +
         "<div class='row'><label class='f' style='flex:1'>Ruhezeit von<input type='time' data-chg='notify' data-k='quiet_from' value='" + esc(s.notify.quiet_from) + "'></label><label class='f' style='flex:1'>bis<input type='time' data-chg='notify' data-k='quiet_to' value='" + esc(s.notify.quiet_to) + "'></label></div>" +
         "<label class='f'>Müll-Erinnerung am Vorabend um<input type='time' data-chg='notify' data-k='waste_time' value='" + esc(s.notify.waste_time) + "'></label></div></div>" +
-        "<div class='card set-sec'><h3>🖼️ Bilderrahmen</h3><div class='form'><label class='f'>Medienordner<input data-chg='frame' data-k='media' value='" + esc(s.frame.media) + "'></label>" +
+        "<div class='card set-sec'><h3>🖼️ Bilderrahmen</h3><div class='form'><label class='f'>Medienordner (Name unter HA-Medien, z. B. Bilder)<input data-chg='frame' data-k='media' placeholder='Bilder' value='" + esc(s.frame.media) + "'></label>" +
         "<div class='row'><label class='f' style='flex:1'>Start nach (Minuten)<input type='number' min='1' data-chg='framenum' data-k='idle_min' value='" + esc(s.frame.idle_min) + "'></label><label class='f' style='flex:1'>Bildwechsel (Sekunden)<input type='number' min='3' data-chg='framenum' data-k='interval_s' value='" + esc(s.frame.interval_s) + "'></label></div>" +
         "<div class='row'><label class='f' style='flex:1'>Nachtruhe von<input type='time' data-chg='frame' data-k='night_from' value='" + esc(s.frame.night_from) + "'></label><label class='f' style='flex:1'>bis<input type='time' data-chg='frame' data-k='night_to' value='" + esc(s.frame.night_to) + "'></label></div>" +
         "<button class='btn sec' data-act='frametest'>▶️ Jetzt testen</button></div></div>" +
@@ -1716,7 +1725,42 @@ label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--mu
       if (this.state) this.render();
     }
     _navOut(v) { var z = (this._cfg || {}).ziel; if (z) navigateTo(z + (v && v !== "start" ? "#" + v : "")); }
-    _resetIdle() { /* kein Bilderrahmen */ }
+    _resetIdle() { /* Ruhebild siehe unten */ }
+    connectedCallback() {
+      super.connectedCallback();
+      if (this._cfg && this._cfg.ruhebild) this._idleStart();
+    }
+    disconnectedCallback() { super.disconnectedCallback(); this._idleStop(); }
+    // Ruhebild: nach einigen Minuten ohne Bedienung Fotos über das ganze Dashboard (nicht in der Nachtruhe)
+    _idleStart() {
+      if (!this._idleEv) {
+        this._idleEv = () => this._idleKick();
+        ["pointerdown", "touchstart", "keydown", "wheel"].forEach((n) => window.addEventListener(n, this._idleEv, { capture: true, passive: true }));
+      }
+      this._idleKick();
+    }
+    _idleStop() {
+      if (this._idleEv) ["pointerdown", "touchstart", "keydown", "wheel"].forEach((n) => window.removeEventListener(n, this._idleEv, { capture: true }));
+      this._idleEv = null; clearTimeout(this._idleT); this._closeShow();
+    }
+    _idleKick() {
+      clearTimeout(this._idleT);
+      var f = (this.state && this.state.settings.frame) || {};
+      var min = Number(this._cfg.ruhebild_minuten || f.idle_min) || 3;
+      this._idleT = setTimeout(() => this._openShow(), min * 60000);
+    }
+    _openShow() {
+      if (this._show || !this.isConnected) return;
+      if (this.state && this._isNight()) { this._idleKick(); return; }
+      var el = document.createElement("familienzentrale-rahmen-card");
+      el.setConfig({ vollbild: true, abdunkeln: this._cfg.ruhebild_abdunkeln || 0, anpassen: this._cfg.anpassen || "contain" });
+      el.style.cssText = "position:fixed;left:0;top:0;right:0;bottom:0;z-index:9999";
+      el._onTap = () => { this._closeShow(); this._idleKick(); };
+      el.hass = this._hass;
+      document.body.appendChild(el);
+      this._show = el;
+    }
+    _closeShow() { if (this._show) { this._show.remove(); this._show = null; } }
     render() {
       if (!this.state) return;
       var st = this.state, t = todayIso(), m = st.settings.modules || {};
@@ -1741,14 +1785,92 @@ label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--mu
     static getStubConfig() { return { stil: "wand", ziel: "/" }; }
   }
 
+  // Bilderrahmen: Fotos aus dem Medienordner (Einstellungen → Bilderrahmen) mit Uhr
+  //   type: custom:familienzentrale-rahmen-card
+  //   abdunkeln: 0.4        dunkler Schleier (0 – 0.9), z. B. für die Nacht
+  //   anpassen: contain     ganzes Foto zeigen; cover = Fläche füllen (schneidet ab)
+  //   timer: timer.xyz      Antippen startet diesen Timer (z. B. „Nacht geweckt“)
+  //   uhr: true
+  class FamilienzentraleRahmenCard extends FamilienzentralePanel {
+    setConfig(c) {
+      this._cfg = Object.assign({ uhr: true }, c || {});
+      if (this._cfg.vollbild) this.setAttribute("data-vollbild", ""); else { this.removeAttribute("data-vollbild"); this.style.height = "100%"; }
+      this.setAttribute("data-anpassen", this._cfg.anpassen === "cover" ? "cover" : "contain");
+      this.style.setProperty("--fz-dim", String(Math.max(0, Math.min(0.9, Number(this._cfg.abdunkeln) || 0))));
+    }
+    _resetIdle() { /* hier nicht */ }
+    connectedCallback() {
+      super.connectedCallback();
+      if (!this._tapBound) { this._tapBound = true; this.shadowRoot.addEventListener("click", () => this._tap()); }
+      clearInterval(this._ct);
+      this._ct = setInterval(() => this._tick(), 15000);
+      if (this.state) this._go();
+    }
+    disconnectedCallback() { super.disconnectedCallback(); clearInterval(this._ct); clearTimeout(this._rt); this._running = false; }
+    _tap() {
+      var c = this._cfg || {};
+      if (c.timer && this._hass && this._hass.callService) this._hass.callService("timer", "start", { entity_id: c.timer });
+      if (this._onTap) this._onTap();
+    }
+    _tick() {
+      var r = this.shadowRoot, d = new Date();
+      var c = r.querySelector(".rclock"); if (c) c.textContent = this._cfg.uhr === false ? "" : this._time();
+      var t = r.querySelector(".rdate"); if (t) t.textContent = this._cfg.uhr === false ? "" : WD_LANG[wd(d)] + ", " + d.getDate() + ". " + MON[d.getMonth()];
+    }
+    render() {
+      if (!this.state) return;
+      this.setAttribute("data-theme", "dunkel");
+      if (!this.shadowRoot.querySelector(".rahmen")) {
+        this._root().innerHTML = "<div class='rahmen'><div class='img'></div><div class='img'></div><div class='dim'></div><div class='rc'><b class='rclock'></b><span class='rdate'></span><span class='rmsg'></span></div></div>";
+        this._k = 0;
+      }
+      this._tick();
+      this._go();
+    }
+    _go() {
+      if (this._running || !this.isConnected) return;
+      this._running = true;
+      this._next();
+    }
+    _next() {
+      if (!this._running) return;
+      var f = (this.state && this.state.settings.frame) || {};
+      var wait = Math.max(3, Number(f.interval_s) || 10) * 1000;
+      var k = this._k || 0;
+      var msg = this.shadowRoot.querySelector(".rmsg");
+      this.backend.act("frame_photo", { index: k }).then((r) => new Promise((res, rej) => {
+        var img = new Image();
+        img.onload = () => res(r.url);
+        img.onerror = () => rej(new Error("Foto konnte nicht geladen werden"));
+        img.src = r.url;
+      })).then((url) => {
+        var imgs = this.shadowRoot.querySelectorAll(".rahmen .img");
+        if (imgs.length < 2) return;
+        var a = imgs[k % 2], b = imgs[(k + 1) % 2];
+        b.style.backgroundImage = "url(\"" + url + "\")"; b.style.opacity = 1; a.style.opacity = 0;
+        if (msg) msg.textContent = "";
+        this._k = k + 1;
+      }).catch((e) => {
+        if (msg) msg.textContent = "🖼️ " + String(e && e.message || e);
+        this._k = k + 1;
+        wait = Math.max(wait, 30000);
+      }).then(() => { clearTimeout(this._rt); if (this._running) this._rt = setTimeout(() => this._next(), wait); });
+    }
+    getCardSize() { return 8; }
+    getGridOptions() { return { columns: "full", rows: 8 }; }
+    static getStubConfig() { return { abdunkeln: 0.4 }; }
+  }
+
   if (!customElements.get("familienzentrale-panel")) customElements.define("familienzentrale-panel", FamilienzentralePanel);
+  if (!customElements.get("familienzentrale-rahmen-card")) customElements.define("familienzentrale-rahmen-card", FamilienzentraleRahmenCard);
   if (!customElements.get("familienzentrale-card")) customElements.define("familienzentrale-card", FamilienzentraleCard);
   if (!customElements.get("familienzentrale-heute-card")) customElements.define("familienzentrale-heute-card", FamilienzentraleHeuteCard);
   window.customCards = window.customCards || [];
   if (!window.customCards.some(function (c) { return c.type === "familienzentrale-card"; })) {
     window.customCards.push(
       { type: "familienzentrale-card", name: "Familienzentrale", description: "Die ganze Familienzentrale in einer Dashboard-Seite" },
-      { type: "familienzentrale-heute-card", name: "Familienzentrale – Heute", description: "Termine, Routinen und Aufgaben pro Person für heute" }
+      { type: "familienzentrale-heute-card", name: "Familienzentrale – Heute", description: "Termine, Routinen und Aufgaben pro Person für heute" },
+      { type: "familienzentrale-rahmen-card", name: "Familienzentrale – Bilderrahmen", description: "Fotos aus dem Medienordner mit Uhr" }
     );
   }
   window.FamilienzentraleLogic = Logic;

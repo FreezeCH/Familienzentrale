@@ -40,6 +40,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # Dashboard-Karten (familienzentrale-card, familienzentrale-heute-card) ohne eigene Ressource laden.
         # Gleiche Adresse wie das Panel, damit der Browser die Datei nur einmal lädt.
         frontend.add_extra_js_url(hass, f"{STATIC_URL}/familienzentrale-panel.js?v={VERSION}")
+        # Bilderrahmen: verkleinerte Fotos
+        from .photo_view import FamilienzentralePhotoView
+
+        hass.http.register_view(FamilienzentralePhotoView(hass))
         hass.data[_FLAG_STATIC] = True
 
     await panel_custom.async_register_panel(
