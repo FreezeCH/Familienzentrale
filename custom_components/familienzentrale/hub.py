@@ -441,7 +441,7 @@ class FamilienzentraleHub:
             raise HomeAssistantError("Dieser Kalender erlaubt Home Assistant kein Löschen – bitte in der Kalender-App löschen")
         if del_mode == "caldav":
             try:
-                await self.hass.async_add_executor_job(caldav_edit.delete, ent, uid, recurrence_id if scope == "one" else None)
+                await self.hass.async_add_executor_job(caldav_edit.delete, ent, uid, recurrence_id if scope == "one" else None, recurrence_id or (event_id.split("|") + ["", "", ""])[2])
             except Exception as err:  # noqa: BLE001
                 raise HomeAssistantError(f"Löschen im CalDAV-Kalender fehlgeschlagen: {err}") from err
             return
@@ -503,7 +503,7 @@ class FamilienzentraleHub:
                                    "description": self._description(d.get("description"), tag)}
         if edit_mode == "caldav":
             try:
-                await self.hass.async_add_executor_job(caldav_edit.update, ent, uid, changes, rid, scope != "one")
+                await self.hass.async_add_executor_job(caldav_edit.update, ent, uid, changes, rid, scope != "one", rid or (str(d.get("id", "")).split("|") + ["", "", ""])[2])
             except Exception as err:  # noqa: BLE001
                 raise HomeAssistantError(f"Ändern im CalDAV-Kalender fehlgeschlagen: {err}") from err
             return

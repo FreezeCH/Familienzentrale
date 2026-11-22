@@ -185,6 +185,8 @@ class FakeComp:
             setattr(self.ev, {"summary": "summary", "description": "description", "location": "location", "dtstart": "start", "dtend": "end"}[k], v)
 
     def get(self, k):
+        if k.upper() == "UID":
+            return self.ev.uid
         return _Prop(self.ev.start if k.upper() == "DTSTART" else self.ev.end)
 
 
@@ -207,10 +209,17 @@ class FakeCaldavCal:
         self.fc = fc
 
     def get_event_by_uid(self, uid):
+        # wie iCloud: Suche nach UID wird abgelehnt
+        raise RuntimeError("ReportError at '412 Precondition Failed ', reason no reason")
+
+    def search(self, start=None, end=None, event=True, expand=False):
+        self.fc.searches = getattr(self.fc, "searches", 0) + 1
+        out = []
         for e in self.fc.events:
-            if e.uid == uid:
-                return FakeCaldavEvent(self.fc, e)
-        raise LookupError("nicht gefunden")
+            s0 = e.start if isinstance(e.start, datetime) else datetime(e.start.year, e.start.month, e.start.day).astimezone()
+            if s0 <= end:  # Serien-Master liegt oft vor dem Zeitraum
+                out.append(FakeCaldavEvent(self.fc, e))
+        return out
 
     def add_event(self, **kw):
         self.fc.add(kw["summary"], kw["dtstart"], kw["dtend"], kw.get("description"), kw.get("rrule"))

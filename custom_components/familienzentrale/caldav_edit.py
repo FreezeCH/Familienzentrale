@@ -11,7 +11,7 @@ Alle Funktionen hier sind blockierend und laufen im Executor.
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 
@@ -29,12 +29,56 @@ def available(entity: Any) -> bool:
     return calendar_of(entity) is not None
 
 
-def _find(cal: Any, uid: str) -> Any:
+def _uid_of(obj: Any) -> str:
+    try:
+        return str(obj.icalendar_component.get("UID") or "")
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _as_dt(value: Any) -> datetime | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    if isinstance(value, date):
+        return datetime(value.year, value.month, value.day, tzinfo=timezone.utc)
+    try:
+        v = _parse_rid(str(value))
+    except ValueError:
+        return None
+    return _as_dt(v)
+
+
+def _find(cal: Any, uid: str, near: Any = None) -> Any:
+    """Termin über seine UID finden.
+
+    Zuerst die übliche UID-Suche. Manche Server (z. B. iCloud) lehnen diese ab
+    („412 Precondition Failed“); dann wird über den Zeitraum gesucht und die UID verglichen.
+    """
     for name in ("get_event_by_uid", "event_by_uid", "object_by_uid"):
         fn = getattr(cal, name, None)
-        if fn is not None:
+        if fn is None:
+            continue
+        try:
             return fn(uid)
-    raise LookupError("Termin nicht gefunden")
+        except Exception:  # noqa: BLE001 - Ersatzweg unten
+            break
+    windows = []
+    center = _as_dt(near)
+    if center is not None:
+        windows.append((center - timedelta(days=2), center + timedelta(days=2)))
+    now = datetime.now(timezone.utc)
+    windows.append((now - timedelta(days=400), now + timedelta(days=400)))
+    for start, end in windows:
+        try:
+            found = cal.search(start=start, end=end, event=True, expand=False)
+        except TypeError:
+            found = cal.date_search(start, end)
+        for obj in found or []:
+            if _uid_of(obj) == uid:
+                return obj
+    raise LookupError("Termin auf dem Server nicht gefunden")
 
 
 def _comp(ev: Any) -> Any:
@@ -61,12 +105,12 @@ def _parse_rid(rid: str) -> date | datetime:
     return datetime.fromisoformat(rid.replace(" ", "T"))
 
 
-def delete(entity: Any, uid: str, recurrence_id: str | None = None) -> None:
+def delete(entity: Any, uid: str, recurrence_id: str | None = None, near: Any = None) -> None:
     """Ganzen Termin bzw. ganze Serie löschen; mit recurrence_id nur dieses eine Vorkommen (EXDATE)."""
     cal = calendar_of(entity)
     if cal is None:
         raise RuntimeError("CalDAV-Verbindung nicht verfügbar")
-    ev = _find(cal, uid)
+    ev = _find(cal, uid, near or recurrence_id)
     if recurrence_id:
         comp = _comp(ev)
         comp.add("exdate", _parse_rid(recurrence_id))
@@ -75,7 +119,7 @@ def delete(entity: Any, uid: str, recurrence_id: str | None = None) -> None:
         ev.delete()
 
 
-def update(entity: Any, uid: str, changes: dict[str, Any], recurrence_id: str | None = None, whole_series: bool = False) -> None:
+def update(entity: Any, uid: str, changes: dict[str, Any], recurrence_id: str | None = None, whole_series: bool = False, near: Any = None) -> None:
     """Termin ändern.
 
     changes: summary, description, location, dtstart, dtend (date oder aware datetime)
@@ -88,7 +132,7 @@ def update(entity: Any, uid: str, changes: dict[str, Any], recurrence_id: str | 
     cal = calendar_of(entity)
     if cal is None:
         raise RuntimeError("CalDAV-Verbindung nicht verfügbar")
-    ev = _find(cal, uid)
+    ev = _find(cal, uid, near or recurrence_id)
     comp = _comp(ev)
     is_series = "RRULE" in comp
     if is_series and recurrence_id and not whole_series:
