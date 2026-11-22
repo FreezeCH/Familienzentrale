@@ -229,13 +229,36 @@ export async function run() {
   check("CalDAV: Serie als Wörterbuch übergeben", yoga && yoga.rrule_type === "dict", yoga);
   st2 = await el.backend.load();
   const yo = st2.events.filter((e) => e.title === "Yoga");
-  check("CalDAV: 3 Termine, ohne Löschen", yo.length === 3 && yo.every((e) => e.can_delete === false), yo.map((e) => [e.start, e.can_delete]));
+  check("CalDAV: 3 Termine, Bearbeiten/Löschen über die Verbindung", yo.length === 3 && yo.every((e) => e.can_delete && e.can_edit && e.edit_mode === "caldav"), yo.map((e) => [e.start, e.can_delete, e.edit_mode]));
   el.state = st2; el.render(); await nav("kalender"); el.sub.cal = "woche"; el.sub.calDate = yo[0].start.slice(0, 10); el.render(); await w();
-  const yev = qa(".evc[data-act=event]").find((e) => e.textContent.includes("Yoga"));
+  let yev = qa(".evc[data-act=event]").find((e) => e.textContent.includes("Yoga"));
   yev.click(); await w();
-  check("CalDAV: Hinweis statt Löschen-Knopf", q(".dlg").textContent.includes("kein Löschen") && !qa(".dlg [data-b]").some((b) => b.textContent.includes("Löschen") || b.textContent.includes("Nur diesen")));
-  q(".dlg [data-b]").click(); await w();
+  check("CalDAV: Bearbeiten-Knopf", qa(".dlg [data-b]").some((b) => b.textContent.includes("Bearbeiten")));
+  qa(".dlg [data-b]").find((b) => b.textContent.includes("Bearbeiten")).click(); await w(); await pinIf();
+  set("title", "Yoga mit Anna"); set("from", "18:30"); set("to", "19:45"); set("scope", "all"); await save(); await w(300);
+  d = await dbg();
+  const y2 = d.calendars["calendar.icloud"].find((e) => e.uid === yoga.uid);
+  check("CalDAV: ganze Serie umbenannt, Uhrzeit verschoben, Datum bleibt", y2.summary === "Yoga mit Anna" && y2.start.includes("18:30") && y2.start.slice(0, 10) === yoga.start.slice(0, 10), y2);
+  st2 = await el.backend.load(); el.state = st2; el.render();
+  yev = qa(".evc[data-act=event]").find((e) => e.textContent.includes("Yoga mit Anna"));
+  yev.click(); await w();
+  qa(".dlg [data-b]").find((b) => b.textContent.includes("Nur diesen")).click(); await w(400); await pinIf(); await w(300);
+  st2 = await el.backend.load();
+  check("CalDAV: einzelnes Vorkommen gelöscht", st2.events.filter((e) => e.title === "Yoga mit Anna").length === 2);
+  el.state = st2; el.render();
   await click("[data-act=calnav][data-v='0']");
+
+  // 8b3 Bearbeiten im lokalen Kalender (offizielle HA-Funktion)
+  st2 = await el.backend.load();
+  const kin = st2.events.find((e) => e.title === "Kinderarzt");
+  await el.backend.act("update_event", { id: kin.id, title: "Kinderarzt (Impfung)", person: A, allday: false, start: todayIso + "T15:00:00", end: todayIso + "T15:45:00", description: kin.description, _pin: el._pinToken });
+  d = await dbg();
+  const kin2 = d.calendars["calendar.familie"].find((e) => e.uid === kin.uid);
+  check("Lokal: Termin geändert, Kind bleibt zugeordnet", kin2.summary === "Kinderarzt (Impfung)" && kin2.start.includes("15:00") && kin2.description.includes("[fz:" + A + "]"), kin2);
+  await el.backend.act("update_event", { id: (await el.backend.load()).events.find((e) => e.title === "Kinderarzt (Impfung)").id, title: "Kinderarzt (Impfung)", person: V, allday: false, start: todayIso + "T15:00:00", end: todayIso + "T15:45:00", _pin: el._pinToken });
+  d = await dbg();
+  check("Lokal: Person mit eigenem Kalender – Termin umgezogen", d.calendars["calendar.vater"].some((e) => e.summary === "Kinderarzt (Impfung)") && !d.calendars["calendar.familie"].some((e) => e.summary === "Kinderarzt (Impfung)"));
+  el.state = await el.backend.load(); el.render();
 
   // 8c Schule & Freizeit
   await nav("schule");

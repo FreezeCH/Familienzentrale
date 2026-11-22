@@ -22,6 +22,7 @@ from . import logic
 from .ingredients import norm
 from .mealie import MealieBridge
 from .rrule import for_platform as rrule_for_platform
+from . import caldav_edit
 from .const import (
     CAL_DAYS_AHEAD,
     CAL_DAYS_BACK,
@@ -331,6 +332,14 @@ class FamilienzentraleHub:
         except (TypeError, ValueError):
             return 0
 
+    def _modes(self, entity_id: str) -> tuple[str | None, str | None]:
+        """(Löschen, Bearbeiten): "entity" = offizielle HA-Funktion, "caldav" = über die CalDAV-Verbindung."""
+        feats = self._cal_features(entity_id)
+        caldav = None
+        if self._platform(entity_id) == "caldav" and caldav_edit.available(self._component_entity("calendar", entity_id)):
+            caldav = "caldav"
+        return ("entity" if feats & 2 else caldav), ("entity" if feats & 4 else caldav)
+
     def _platform(self, entity_id: str) -> str | None:
         ent = er.async_get(self.hass).async_get(entity_id)
         return ent.platform if ent else None
@@ -348,7 +357,7 @@ class FamilienzentraleHub:
             except Exception:  # noqa: BLE001 - ein defekter Kalender darf die Seite nicht blockieren
                 _LOGGER.warning("Termine aus %s konnten nicht gelesen werden", entity_id, exc_info=True)
                 continue
-            can_delete = bool(self._cal_features(entity_id) & 2)  # CalendarEntityFeature.DELETE_EVENT
+            del_mode, edit_mode = self._modes(entity_id)
             for ev in items:
                 allday = not isinstance(ev.start, datetime)
                 who = person
@@ -370,7 +379,10 @@ class FamilienzentraleHub:
                         "end": ev.end.isoformat() if allday else dt_util.as_local(ev.end).replace(tzinfo=None).isoformat(),
                         "rrule": getattr(ev, "rrule", None),
                         "recurrence_id": getattr(ev, "recurrence_id", None),
-                        "can_delete": can_delete,
+                        "can_delete": del_mode is not None,
+                        "can_edit": edit_mode is not None,
+                        "edit_mode": edit_mode,
+                        "description": desc.split(PERSON_TAG, 1)[0].strip() if PERSON_TAG in desc else desc,
                     }
                 )
         events.sort(key=lambda e: e["start"])
@@ -424,14 +436,82 @@ class FamilienzentraleHub:
     async def _async_delete_event(self, event_id: str, recurrence_id: str | None = None, scope: str = "all") -> None:
         entity_id, uid, _ = (event_id.split("|") + ["", "", ""])[:3]
         ent = self._component_entity("calendar", entity_id)
-        if ent is None or not uid or not hasattr(ent, "async_delete_event") or not (self._cal_features(entity_id) & 2):
+        del_mode = self._modes(entity_id)[0] if ent is not None else None
+        if ent is None or not uid or del_mode is None:
             raise HomeAssistantError("Dieser Kalender erlaubt Home Assistant kein Löschen – bitte in der Kalender-App löschen")
+        if del_mode == "caldav":
+            try:
+                await self.hass.async_add_executor_job(caldav_edit.delete, ent, uid, recurrence_id if scope == "one" else None)
+            except Exception as err:  # noqa: BLE001
+                raise HomeAssistantError(f"Löschen im CalDAV-Kalender fehlgeschlagen: {err}") from err
+            return
         if scope == "one" and recurrence_id:
             await ent.async_delete_event(uid, recurrence_id=recurrence_id)
         elif scope == "future" and recurrence_id:
             await ent.async_delete_event(uid, recurrence_id=recurrence_id, recurrence_range="THISANDFUTURE")
         else:
             await ent.async_delete_event(uid)
+
+    def _target_for(self, person: str | None) -> tuple[str | None, str | None]:
+        """(Kalender, Person für Markierung) – Person ohne eigenen Kalender kommt in den Familienkalender."""
+        target = None
+        if person:
+            p = self._find("persons", person)
+            target = p.get("calendar") if p else None
+        tag = person if (person and not target) else None
+        return target or self.data["settings"].get("family_calendar"), tag
+
+    def _description(self, base: str | None, tag_person: str | None) -> str | None:
+        base = (base or "").split(PERSON_TAG, 1)[0].strip()
+        if base.startswith("Für ") and "\n" not in base and len(base) < 60:
+            base = ""  # alte automatische Markierung „Für …“
+        if tag_person:
+            p = self._find("persons", tag_person)
+            tag = f"Für {p.get('name') if p else ''} {PERSON_TAG}{tag_person}]"
+            return f"{base}\n{tag}" if base else tag
+        return base or None
+
+    @staticmethod
+    def _when(d: dict) -> tuple[Any, Any]:
+        if d.get("allday"):
+            return date.fromisoformat(str(d["start"])[:10]), date.fromisoformat(str(d["end"])[:10])
+        tz = dt_util.now().tzinfo
+        return datetime.fromisoformat(str(d["start"])).replace(tzinfo=tz), datetime.fromisoformat(str(d["end"])).replace(tzinfo=tz)
+
+    async def _async_update_event(self, d: dict) -> None:
+        entity_id, uid, _ = (str(d.get("id", "")).split("|") + ["", "", ""])[:3]
+        ent = self._component_entity("calendar", entity_id)
+        if ent is None or not uid:
+            raise HomeAssistantError("Termin nicht gefunden")
+        new_target, tag = self._target_for(d.get("person"))
+        rid = d.get("recurrence_id")
+        scope = str(d.get("scope") or "one")
+        start, end = self._when(d)
+        if new_target and new_target != entity_id:
+            # andere Person mit eigenem Kalender: neu anlegen, alten Termin entfernen
+            if rid and scope != "one":
+                raise HomeAssistantError("Eine ganze Serie kann nicht in einen anderen Kalender verschoben werden")
+            if self._modes(entity_id)[0] is None:
+                raise HomeAssistantError("Der alte Termin kann in diesem Kalender nicht gelöscht werden – Person bitte in der Kalender-App ändern")
+            await self._async_add_event({"title": d.get("title"), "person": d.get("person"), "allday": d.get("allday"), "start": d["start"], "end": d["end"]})
+            await self._async_delete_event(str(d["id"]), rid, "one" if rid else "all")
+            return
+        edit_mode = self._modes(entity_id)[1]
+        if edit_mode is None:
+            raise HomeAssistantError("Dieser Kalender erlaubt Home Assistant kein Bearbeiten – bitte in der Kalender-App ändern")
+        changes: dict[str, Any] = {"summary": d.get("title") or "Termin", "dtstart": start, "dtend": end,
+                                   "description": self._description(d.get("description"), tag)}
+        if edit_mode == "caldav":
+            try:
+                await self.hass.async_add_executor_job(caldav_edit.update, ent, uid, changes, rid, scope != "one")
+            except Exception as err:  # noqa: BLE001
+                raise HomeAssistantError(f"Ändern im CalDAV-Kalender fehlgeschlagen: {err}") from err
+            return
+        event = {k: v for k, v in changes.items() if v is not None}
+        if rid and scope != "one":
+            await ent.async_update_event(uid, event, recurrence_id=rid, recurrence_range="THISANDFUTURE")
+        else:
+            await ent.async_update_event(uid, event, recurrence_id=rid)
 
     # ---------- Einkauf (To-do-Liste, z. B. Bring) ----------
     def _shopping_list(self) -> str:
@@ -480,7 +560,7 @@ class FamilienzentraleHub:
             raise HomeAssistantError("Eltern-PIN nötig")
         if action == "save_settings" and set(data) - FREE_SETTINGS and not self._token_ok(token):
             raise HomeAssistantError("Eltern-PIN nötig")
-        if action in ("add_event", "delete_event") and self.data["settings"].get("lock_calendar") and not self._token_ok(token):
+        if action in ("add_event", "delete_event", "update_event") and self.data["settings"].get("lock_calendar") and not self._token_ok(token):
             raise HomeAssistantError("Eltern-PIN nötig")
 
         d = self.data
@@ -643,6 +723,10 @@ class FamilienzentraleHub:
 
         elif action == "add_event":
             await self._async_add_event(data)
+            self.invalidate_events()
+
+        elif action == "update_event":
+            await self._async_update_event(data)
             self.invalidate_events()
 
         elif action == "delete_event":

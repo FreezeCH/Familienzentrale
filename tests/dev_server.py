@@ -131,6 +131,20 @@ class FakeCalendar:
                     res.append(occ)
         return res
 
+    async def async_update_event(self, uid, event, recurrence_id=None, recurrence_range=None):
+        ev = next(e for e in self.events if e.uid == uid)
+        if ev.rrule and recurrence_id and recurrence_range != "THISANDFUTURE":
+            ev.exdates.add(recurrence_id)
+            self.add(event["summary"], event["dtstart"], event["dtend"], event.get("description"))
+            return
+        ev.summary = event["summary"]
+        ev.description = event.get("description")
+        if ev.rrule:
+            ev.start = datetime.combine(ev.start.date(), event["dtstart"].timetz()) if isinstance(ev.start, datetime) else ev.start
+            ev.end = ev.start + (event["dtend"] - event["dtstart"])
+        else:
+            ev.start, ev.end = event["dtstart"], event["dtend"]
+
     async def async_delete_event(self, uid, recurrence_id=None, recurrence_range=None):
         if recurrence_id:
             for e in self.events:
@@ -138,6 +152,68 @@ class FakeCalendar:
                     e.exdates.add(recurrence_id)
             return
         self.events = [e for e in self.events if e.uid != uid]
+
+
+class _Prop:
+    def __init__(self, dt):
+        self.dt = dt
+
+
+def _rid(v):
+    return v.strftime("%Y%m%dT%H%M%S") if isinstance(v, datetime) else v.strftime("%Y%m%d")
+
+
+class FakeComp:
+    """Wie icalendar.Component, nur das Nötigste für caldav_edit."""
+
+    def __init__(self, ev):
+        self.ev = ev
+
+    def __contains__(self, k):
+        k = k.upper()
+        return {"RRULE": bool(self.ev.rrule), "SUMMARY": True, "DTSTART": True, "DTEND": True,
+                "DESCRIPTION": self.ev.description is not None, "LOCATION": self.ev.location is not None}.get(k, False)
+
+    def pop(self, k):
+        setattr(self.ev, {"SUMMARY": "summary", "DESCRIPTION": "description", "LOCATION": "location", "DTSTART": "start", "DTEND": "end"}.get(k.upper(), "_x"), None)
+
+    def add(self, k, v):
+        k = k.lower()
+        if k == "exdate":
+            self.ev.exdates.add(_rid(v))
+        else:
+            setattr(self.ev, {"summary": "summary", "description": "description", "location": "location", "dtstart": "start", "dtend": "end"}[k], v)
+
+    def get(self, k):
+        return _Prop(self.ev.start if k.upper() == "DTSTART" else self.ev.end)
+
+
+class FakeCaldavEvent:
+    def __init__(self, fc, ev):
+        self.fc, self.ev = fc, ev
+        self.icalendar_component = FakeComp(ev)
+
+    def save(self):
+        self.fc.saved = getattr(self.fc, "saved", 0) + 1
+
+    def delete(self):
+        self.fc.events = [e for e in self.fc.events if e is not self.ev]
+
+
+class FakeCaldavCal:
+    """Wie caldav.Calendar der HA-Integration (coordinator.calendar)."""
+
+    def __init__(self, fc):
+        self.fc = fc
+
+    def get_event_by_uid(self, uid):
+        for e in self.fc.events:
+            if e.uid == uid:
+                return FakeCaldavEvent(self.fc, e)
+        raise LookupError("nicht gefunden")
+
+    def add_event(self, **kw):
+        self.fc.add(kw["summary"], kw["dtstart"], kw["dtend"], kw.get("description"), kw.get("rrule"))
 
 
 class Component:
@@ -314,6 +390,7 @@ def build():
         hass.platforms[eid] = "local_calendar"
     # wie iCloud über CalDAV: nur Anlegen erlaubt
     icloud = FakeCalendar()
+    icloud.coordinator = types.SimpleNamespace(calendar=FakeCaldavCal(icloud))
     hass.data["calendar"].entities["calendar.icloud"] = icloud
     hass.states.add("calendar.icloud", "iCloud", 1)
     hass.platforms["calendar.icloud"] = "caldav"

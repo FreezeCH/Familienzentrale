@@ -8,7 +8,7 @@
  */
 (function () {
   "use strict";
-  var PANEL_VERSION = "0.5.1"; // muss zu const.py VERSION passen
+  var PANEL_VERSION = "0.5.2"; // muss zu const.py VERSION passen
 
   // ---------- Hilfsfunktionen ----------
   var pad = function (n) { return String(n).padStart(2, "0"); };
@@ -374,6 +374,18 @@
       case "add_event": {
         var sid = uid();
         mockExpand(data).forEach(function (occ, n) { st.events.push(Object.assign({}, data, occ, { id: sid + "-" + n, series: data.rrule ? sid : null, recurrence_id: data.rrule ? occ.start : null })); });
+        break;
+      }
+      case "update_event": {
+        var ue = st.events.filter(function (e) { return e.id === data.id; })[0];
+        if (!ue) break;
+        var targets = ue.series && data.scope === "all" ? st.events.filter(function (e) { return e.series === ue.series; }) : [ue];
+        targets.forEach(function (e) {
+          e.title = data.title; e.person = data.person; e.allday = data.allday;
+          if (e === ue) { e.start = data.start; e.end = data.end; }
+          else if (!data.allday) { e.start = String(e.start).slice(0, 10) + String(data.start).slice(10); e.end = String(e.end).slice(0, 10) + String(data.end).slice(10); }
+        });
+        if (data.scope === "one") { ue.series = null; ue.recurrence_id = null; ue.rrule = null; }
         break;
       }
       case "delete_event": {
@@ -1419,15 +1431,37 @@ label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--mu
         return this.act("add_event", ev).then(() => this.toast(rr ? "🔁 Serientermin angelegt" : "✓ Termin angelegt"));
       });
     }
+    _editEvent(e) {
+      var series = !!(e.rrule || e.recurrence_id);
+      var cal = [["", "Alle / Familie"]].concat(this.state.persons.map((p) => [p.id, p.name]));
+      var fields = [
+        { k: "title", l: "Titel", t: "text" }, { k: "person", l: "Für", t: "select", o: cal }, { k: "date", l: "Datum", t: "date" },
+        { k: "allday", l: "Ganztägig", t: "toggle" }, { k: "from", l: "Von", t: "time" }, { k: "to", l: "Bis", t: "time" }
+      ];
+      if (series) fields.push({ k: "scope", l: "🔁 Änderung gilt für", t: "select", o: [["one", "Nur diesen Termin"], ["all", e.edit_mode === "caldav" ? "Ganze Serie (Titel, Uhrzeit, Person)" : "Diesen und alle folgenden"]] });
+      var allday = !!e.allday || String(e.start).length <= 10;
+      var vals = { title: e.title, person: e.person || "", date: String(e.start).slice(0, 10), allday: allday, from: allday ? "09:00" : String(e.start).slice(11, 16), to: allday ? "10:00" : String(e.end).slice(11, 16), scope: "one" };
+      var days = allday ? Math.max(1, daysBetween(String(e.start).slice(0, 10), String(e.end).slice(0, 10))) : 0;
+      this.form("✏️ Termin bearbeiten", fields, vals, (v) => {
+        if (!v.title) { this.toast("Bitte einen Titel eingeben"); return Promise.reject(new Error("titel")); }
+        var u = { id: e.id, recurrence_id: e.recurrence_id || null, scope: v.scope || "one", title: v.title, person: v.person || null, allday: !!v.allday, description: e.description || "" };
+        if (v.allday) { u.start = v.date; u.end = iso(addDays(parse(v.date), days || 1)); }
+        else { u.start = v.date + "T" + (v.from || "09:00") + ":00"; u.end = v.date + "T" + (v.to || v.from || "10:00") + ":00"; }
+        if (!v.allday && u.end <= u.start) { this.toast("„Bis“ muss nach „Von“ liegen"); return Promise.reject(new Error("zeit")); }
+        return this.act("update_event", u).then(() => this.toast("✓ Termin geändert"));
+      });
+    }
     _eventDlg(id) {
       var e = this.state.events.filter((x) => x.id === id)[0];
       if (!e) return;
       var p = this.person(e.person);
       var series = !!(e.rrule || e.recurrence_id);
       var del = (scope) => () => { this.closeDialog(); (this.state.settings.lock_calendar ? this.pin.bind(this) : (f) => f())(() => this.act("delete_event", { id: id, recurrence_id: e.recurrence_id || null, scope: scope }).then(() => this.toast(scope === "all" && series ? "🗑️ Serie gelöscht" : "🗑️ Termin gelöscht"))); return false; };
-      var canDel = e.can_delete !== false;
+      var canDel = e.can_delete !== false, canEdit = e.can_edit !== false;
       this.dialog(esc(e.title), "<p>" + (p ? this.av(p, "s") + " " + esc(p.name) + "<br>" : "") + fmtDate(e.start) + " · " + this._evTime(e) + (e.location ? "<br>📍 " + esc(e.location) : "") + (series ? "<br>🔁 " + esc(Logic.rruleText(e.rrule) || "Serientermin") : "") + "</p>" + (canDel ? "" : "<p class='small muted'>Dieser Kalender erlaubt Home Assistant kein Löschen. Ändern oder löschen bitte in der Kalender-App (z. B. iPhone-Kalender).</p>"),
-        (!canDel ? [] : series ? [["🗑️ Nur diesen", "bad", del("one")], ["🗑️ Ganze Serie", "bad", del("all")]] : [["🗑️ Löschen", "bad", del("all")]]).concat([["Schliessen", "sec"]]));
+        (!canDel ? [] : series ? [["🗑️ Nur diesen", "bad", del("one")], ["🗑️ Ganze Serie", "bad", del("all")]] : [["🗑️ Löschen", "bad", del("all")]])
+          .concat(canEdit ? [["✏️ Bearbeiten", "", () => { this.closeDialog(); (this.state.settings.lock_calendar ? this.pin.bind(this) : (f) => f())(() => this._editEvent(e)); return false; }]] : [])
+          .concat([["Schliessen", "sec"]]));
     }
 
     _mealDlg(date, slot) {

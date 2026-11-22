@@ -15,7 +15,7 @@ Ein Familienplaner als eigenes Panel in Home Assistant, für das Wand-Tablet und
 Alles wird in der Oberfläche eingestellt. Es gibt kein YAML.
 
 ## Status
-In Entwicklung (Version 0.5.1).
+In Entwicklung (Version 0.5.2).
 
 | Teil | Stand |
 |---|---|
@@ -27,6 +27,7 @@ In Entwicklung (Version 0.5.1).
 | Einkauf über eine To-do-Liste (z. B. Bring) | fertig |
 | Schule & Freizeit: Stundenplan pro Kind, Sport- und Freizeitaktivitäten (auch alle 2 Wochen, Saison, Pause in den Ferien), Ferien | fertig |
 | Serientermine (täglich, wöchentlich mit Wochentagen, monatlich, jährlich; Ende nach Datum oder Anzahl) | fertig |
+| Termine bearbeiten und löschen (auch CalDAV/iCloud über die bestehende Verbindung der HA-Integration) | fertig |
 | Essensplan mit Mealie: Wochenplan lesen und schreiben, Rezeptsuche mit Bildern, Zutaten mit Mengen an die Einkaufsliste, Gerichtstypen wählbar | fertig |
 | Erinnerungen über Telegram und Sonos | folgt |
 | Bilderrahmen | folgt |
