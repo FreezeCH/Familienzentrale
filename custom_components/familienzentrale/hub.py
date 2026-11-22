@@ -21,6 +21,7 @@ from homeassistant.util import dt as dt_util
 from . import logic
 from .ingredients import norm
 from .mealie import MealieBridge
+from .rrule import for_platform as rrule_for_platform
 from .const import (
     CAL_DAYS_AHEAD,
     CAL_DAYS_BACK,
@@ -323,6 +324,17 @@ class FamilienzentraleHub:
                 m[p["calendar"]] = p["id"]
         return m
 
+    def _cal_features(self, entity_id: str) -> int:
+        state = self.hass.states.get(entity_id)
+        try:
+            return int((state.attributes if state else {}).get("supported_features") or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    def _platform(self, entity_id: str) -> str | None:
+        ent = er.async_get(self.hass).async_get(entity_id)
+        return ent.platform if ent else None
+
     async def _async_events(self) -> list[dict[str, Any]]:
         start = dt_util.start_of_local_day() - timedelta(days=CAL_DAYS_BACK)
         end = dt_util.start_of_local_day() + timedelta(days=CAL_DAYS_AHEAD)
@@ -336,6 +348,7 @@ class FamilienzentraleHub:
             except Exception:  # noqa: BLE001 - ein defekter Kalender darf die Seite nicht blockieren
                 _LOGGER.warning("Termine aus %s konnten nicht gelesen werden", entity_id, exc_info=True)
                 continue
+            can_delete = bool(self._cal_features(entity_id) & 2)  # CalendarEntityFeature.DELETE_EVENT
             for ev in items:
                 allday = not isinstance(ev.start, datetime)
                 who = person
@@ -357,6 +370,7 @@ class FamilienzentraleHub:
                         "end": ev.end.isoformat() if allday else dt_util.as_local(ev.end).replace(tzinfo=None).isoformat(),
                         "rrule": getattr(ev, "rrule", None),
                         "recurrence_id": getattr(ev, "recurrence_id", None),
+                        "can_delete": can_delete,
                     }
                 )
         events.sort(key=lambda e: e["start"])
@@ -383,7 +397,7 @@ class FamilienzentraleHub:
             ent = self._component_entity("calendar", target)
             if ent is None or not hasattr(ent, "async_create_event"):
                 raise HomeAssistantError("Dieser Kalender kann keine Termine anlegen")
-            kw: dict[str, Any] = {"summary": data["summary"], "rrule": rrule.removeprefix("RRULE:")}
+            kw: dict[str, Any] = {"summary": data["summary"], "rrule": rrule_for_platform(rrule, self._platform(target))}
             if data.get("description"):
                 kw["description"] = data["description"]
             if d.get("allday"):
@@ -410,8 +424,8 @@ class FamilienzentraleHub:
     async def _async_delete_event(self, event_id: str, recurrence_id: str | None = None, scope: str = "all") -> None:
         entity_id, uid, _ = (event_id.split("|") + ["", "", ""])[:3]
         ent = self._component_entity("calendar", entity_id)
-        if ent is None or not uid or not hasattr(ent, "async_delete_event"):
-            raise HomeAssistantError("Dieser Termin kann hier nicht gelöscht werden")
+        if ent is None or not uid or not hasattr(ent, "async_delete_event") or not (self._cal_features(entity_id) & 2):
+            raise HomeAssistantError("Dieser Kalender erlaubt Home Assistant kein Löschen – bitte in der Kalender-App löschen")
         if scope == "one" and recurrence_id:
             await ent.async_delete_event(uid, recurrence_id=recurrence_id)
         elif scope == "future" and recurrence_id:

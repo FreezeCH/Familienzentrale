@@ -107,6 +107,14 @@ class FakeCalendar:
 
     def add(self, summary, start, end, description=None, rrule=None):
         self._n += 1
+        self.rrule_types = getattr(self, "rrule_types", [])
+        self.rrule_types.append(type(rrule).__name__)
+        if isinstance(rrule, dict):  # CalDAV-Format zurück in Text, nur für die Test-Auflösung
+            def fmt(k, v):
+                if k == "UNTIL":
+                    return v.strftime("%Y%m%dT%H%M%SZ") if isinstance(v, datetime) else v.strftime("%Y%m%d")
+                return ",".join(str(x) for x in v) if isinstance(v, list) else str(v)
+            rrule = ";".join(f"{k}={fmt(k, v)}" for k, v in rrule.items())
         self.events.append(CalEvent(f"e{self._n}", summary, start, end, description=description, rrule=rrule))
 
     async def async_create_event(self, **kw):
@@ -150,8 +158,13 @@ class States:
     def __init__(self):
         self._s: dict[str, State] = {}
 
-    def add(self, entity_id, name):
+    def add(self, entity_id, name, features=None):
         self._s[entity_id] = State(entity_id, name)
+        if features is not None:
+            self._s[entity_id].attributes["supported_features"] = features
+
+    def get(self, entity_id):
+        return self._s.get(entity_id)
 
     def async_all(self, domain=None):
         return [s for k, s in self._s.items() if domain is None or k.startswith(domain + ".")]
@@ -297,8 +310,13 @@ def build():
     vater.add("Zahnarzt", now.replace(hour=9), now.replace(hour=10))
     for eid, name, ent in (("calendar.familie", "Familie", fam), ("calendar.vater", "Vater", vater)):
         hass.data["calendar"].entities[eid] = ent
-        hass.states.add(eid, name)
+        hass.states.add(eid, name, 7)
         hass.platforms[eid] = "local_calendar"
+    # wie iCloud über CalDAV: nur Anlegen erlaubt
+    icloud = FakeCalendar()
+    hass.data["calendar"].entities["calendar.icloud"] = icloud
+    hass.states.add("calendar.icloud", "iCloud", 1)
+    hass.platforms["calendar.icloud"] = "caldav"
     bring = FakeTodo()
     for x in ("Milch", "Brot"):
         bring.add(x)
@@ -326,7 +344,7 @@ def run(coro):
 
 
 def debug():
-    cal = {k: [{"uid": e.uid, "summary": e.summary, "start": str(e.start), "description": e.description, "rrule": e.rrule, "exdates": sorted(e.exdates)} for e in v.events] for k, v in HASS.data["calendar"].entities.items()}
+    cal = {k: [{"uid": e.uid, "summary": e.summary, "start": str(e.start), "description": e.description, "rrule": e.rrule, "exdates": sorted(e.exdates), "rrule_type": (getattr(v, "rrule_types", []) or [None])[i] if i < len(getattr(v, "rrule_types", [])) else None} for i, e in enumerate(v.events)] for k, v in HASS.data["calendar"].entities.items()}
     todo = {k: [{"uid": i.uid, "summary": i.summary, "status": i.status.value, "description": getattr(i, "description", None)} for i in v.todo_items] for k, v in HASS.data["todo"].entities.items()}
     plans = [{"id": p["mealplan_id"], "type": p["entry_type"].value, "date": str(p["mealplan_date"]), "title": p["title"], "recipe": (p["recipe"] or {}).get("name")} for p in HASS.mealie.plans]
     return {"mealie": plans, "data": HUB.data, "calendars": cal, "todo": todo, "events": HASS.bus.fired, "service_calls": HASS.services.calls, "stored": fake_storage._MEM}

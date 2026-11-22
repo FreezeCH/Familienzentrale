@@ -8,7 +8,7 @@
  */
 (function () {
   "use strict";
-  var PANEL_VERSION = "0.5.0"; // muss zu const.py VERSION passen
+  var PANEL_VERSION = "0.5.1"; // muss zu const.py VERSION passen
 
   // ---------- Hilfsfunktionen ----------
   var pad = function (n) { return String(n).padStart(2, "0"); };
@@ -1425,8 +1425,9 @@ label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--mu
       var p = this.person(e.person);
       var series = !!(e.rrule || e.recurrence_id);
       var del = (scope) => () => { this.closeDialog(); (this.state.settings.lock_calendar ? this.pin.bind(this) : (f) => f())(() => this.act("delete_event", { id: id, recurrence_id: e.recurrence_id || null, scope: scope }).then(() => this.toast(scope === "all" && series ? "🗑️ Serie gelöscht" : "🗑️ Termin gelöscht"))); return false; };
-      this.dialog(esc(e.title), "<p>" + (p ? this.av(p, "s") + " " + esc(p.name) + "<br>" : "") + fmtDate(e.start) + " · " + this._evTime(e) + (e.location ? "<br>📍 " + esc(e.location) : "") + (series ? "<br>🔁 " + esc(Logic.rruleText(e.rrule) || "Serientermin") : "") + "</p>",
-        (series ? [["🗑️ Nur diesen", "bad", del("one")], ["🗑️ Ganze Serie", "bad", del("all")]] : [["🗑️ Löschen", "bad", del("all")]]).concat([["Schliessen", "sec"]]));
+      var canDel = e.can_delete !== false;
+      this.dialog(esc(e.title), "<p>" + (p ? this.av(p, "s") + " " + esc(p.name) + "<br>" : "") + fmtDate(e.start) + " · " + this._evTime(e) + (e.location ? "<br>📍 " + esc(e.location) : "") + (series ? "<br>🔁 " + esc(Logic.rruleText(e.rrule) || "Serientermin") : "") + "</p>" + (canDel ? "" : "<p class='small muted'>Dieser Kalender erlaubt Home Assistant kein Löschen. Ändern oder löschen bitte in der Kalender-App (z. B. iPhone-Kalender).</p>"),
+        (!canDel ? [] : series ? [["🗑️ Nur diesen", "bad", del("one")], ["🗑️ Ganze Serie", "bad", del("all")]] : [["🗑️ Löschen", "bad", del("all")]]).concat([["Schliessen", "sec"]]));
     }
 
     _mealDlg(date, slot) {

@@ -219,6 +219,24 @@ export async function run() {
   check("Ganze Serie gelöscht", !st2.events.some((e) => e.title === "Turnen Serie"));
   await click("[data-act=calnav][data-v='0']");
 
+  // 8b2 CalDAV (z. B. iCloud): Serie im Wörterbuch-Format, kein Löschen
+  d = await dbg();
+  const mutter = d.data.persons.find((p) => p.name === "Mutter");
+  await el.backend.act("save_item", { collection: "persons", item: Object.assign({}, mutter, { calendar: "calendar.icloud" }), _pin: el._pinToken });
+  await el.backend.act("add_event", { title: "Yoga", person: mutter.id, allday: false, start: todayIso + "T19:00:00", end: todayIso + "T20:00:00", rrule: "FREQ=WEEKLY;INTERVAL=2;BYDAY=TU;COUNT=3", _pin: el._pinToken });
+  d = await dbg();
+  const yoga = d.calendars["calendar.icloud"].find((e) => e.summary === "Yoga");
+  check("CalDAV: Serie als Wörterbuch übergeben", yoga && yoga.rrule_type === "dict", yoga);
+  st2 = await el.backend.load();
+  const yo = st2.events.filter((e) => e.title === "Yoga");
+  check("CalDAV: 3 Termine, ohne Löschen", yo.length === 3 && yo.every((e) => e.can_delete === false), yo.map((e) => [e.start, e.can_delete]));
+  el.state = st2; el.render(); await nav("kalender"); el.sub.cal = "woche"; el.sub.calDate = yo[0].start.slice(0, 10); el.render(); await w();
+  const yev = qa(".evc[data-act=event]").find((e) => e.textContent.includes("Yoga"));
+  yev.click(); await w();
+  check("CalDAV: Hinweis statt Löschen-Knopf", q(".dlg").textContent.includes("kein Löschen") && !qa(".dlg [data-b]").some((b) => b.textContent.includes("Löschen") || b.textContent.includes("Nur diesen")));
+  q(".dlg [data-b]").click(); await w();
+  await click("[data-act=calnav][data-v='0']");
+
   // 8c Schule & Freizeit
   await nav("schule");
   check("Menüpunkt Schule & Freizeit", txt().includes("Stundenplan") && txt().includes("Sport & Freizeit"));
