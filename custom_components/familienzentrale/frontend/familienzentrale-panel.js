@@ -8,7 +8,7 @@
  */
 (function () {
   "use strict";
-  var PANEL_VERSION = "0.4.4"; // muss zu const.py VERSION passen
+  var PANEL_VERSION = "0.5.0"; // muss zu const.py VERSION passen
 
   // ---------- Hilfsfunktionen ----------
   var pad = function (n) { return String(n).padStart(2, "0"); };
@@ -112,6 +112,61 @@
       var done = Logic.routineDone(r, pid, day), steps = r.steps || [];
       if (!steps.length) return [done.indexOf("*") >= 0 ? 1 : 0, 1];
       return [steps.filter(function (x) { return done.indexOf(x.id) >= 0; }).length, steps.length];
+    },
+    // Schule & Freizeit
+    // Wiederholungsregel (RFC 5545) aus dem Formular
+    buildRrule: function (v, allday) {
+      if (!v.rr_freq) return "";
+      var parts = ["FREQ=" + v.rr_freq];
+      var n = Number(v.rr_interval) || 1;
+      if (n > 1) parts.push("INTERVAL=" + n);
+      if (v.rr_freq === "WEEKLY") {
+        var days = (v.rr_days || []).map(Number);
+        if (!days.length) days = [wd(parse(v.date))];
+        parts.push("BYDAY=" + days.sort().map(function (i) { return ["MO", "TU", "WE", "TH", "FR", "SA", "SU"][i]; }).join(","));
+      }
+      if (Number(v.rr_count) > 0) parts.push("COUNT=" + Number(v.rr_count));
+      else if (v.rr_until) {
+        var u = parse(v.rr_until);
+        if (allday) parts.push("UNTIL=" + iso(u).replace(/-/g, ""));
+        else { var z = new Date(u.getFullYear(), u.getMonth(), u.getDate(), 23, 59, 59).toISOString(); parts.push("UNTIL=" + z.replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z")); }
+      }
+      return parts.join(";");
+    },
+    rruleText: function (rr) {
+      if (!rr) return "";
+      var m = {}; String(rr).replace(/^RRULE:/, "").split(";").forEach(function (x) { var kv = x.split("="); m[kv[0]] = kv[1]; });
+      var n = Number(m.INTERVAL) || 1;
+      var base = { DAILY: n > 1 ? "alle " + n + " Tage" : "täglich", WEEKLY: n > 1 ? "alle " + n + " Wochen" : "wöchentlich", MONTHLY: n > 1 ? "alle " + n + " Monate" : "monatlich", YEARLY: "jährlich" }[m.FREQ] || "Serie";
+      if (m.BYDAY) base += " am " + m.BYDAY.split(",").map(function (d) { return WD[["MO", "TU", "WE", "TH", "FR", "SA", "SU"].indexOf(d)] || d; }).join(", ");
+      if (m.COUNT) base += ", " + m.COUNT + "×";
+      if (m.UNTIL) base += ", bis " + m.UNTIL.slice(6, 8) + "." + m.UNTIL.slice(4, 6) + "." + m.UNTIL.slice(0, 4);
+      return base;
+    },
+    isHoliday: function (st, day) { return (st.holidays || []).some(function (h) { return h.from && h.to && h.from <= day && day <= h.to; }); },
+    lessonsOn: function (st, pid, day) {
+      if (wd(parse(day)) > 4 && !(st.timetable || []).some(function (l) { return (l.days || []).map(Number).indexOf(wd(parse(day))) >= 0; })) return [];
+      if (Logic.isHoliday(st, day)) return [];
+      return (st.timetable || []).filter(function (l) { return l.person === pid && (l.days || []).map(Number).indexOf(wd(parse(day))) >= 0; })
+        .sort(function (a, b) { return String(a.start) < String(b.start) ? -1 : 1; });
+    },
+    activityOn: function (st, a, day) {
+      var dd = parse(day);
+      if ((a.days || []).map(Number).indexOf(wd(dd)) < 0) return false;
+      if (a.season_from && day < a.season_from) return false;
+      if (a.season_to && day > a.season_to) return false;
+      if (a.pause_holidays && Logic.isHoliday(st, day)) return false;
+      var every = Number(a.every_weeks) || 1;
+      if (every > 1) {
+        var anchor = weekStart(parse(a.first || a.season_from || day));
+        var weeks = Math.round((weekStart(dd) - anchor) / (7 * 86400000));
+        if (weeks < 0 || weeks % every !== 0) return false;
+      }
+      return true;
+    },
+    activitiesOn: function (st, day, pid) {
+      return (st.activities || []).filter(function (a) { return (!pid || (a.persons || []).indexOf(pid) >= 0) && Logic.activityOn(st, a, day); })
+        .sort(function (a, b) { return String(a.start || "") < String(b.start || "") ? -1 : 1; });
     },
     modeText: function (m) { return { jeder: "jeder für sich", gemeinsam: "einer für alle", reihum: "reihum" }[m || "jeder"]; },
     repeatText: function (r) {
@@ -316,12 +371,16 @@
         st.history.unshift({ id: uid(), kind: "wartung", name: m.name, person: data.person, ts: now });
         break;
       }
-      case "add_event":
-        st.events.push(Object.assign({ id: uid() }, data));
+      case "add_event": {
+        var sid = uid();
+        mockExpand(data).forEach(function (occ, n) { st.events.push(Object.assign({}, data, occ, { id: sid + "-" + n, series: data.rrule ? sid : null, recurrence_id: data.rrule ? occ.start : null })); });
         break;
-      case "delete_event":
-        st.events = st.events.filter(function (e) { return e.id !== data.id; });
+      }
+      case "delete_event": {
+        var de = st.events.filter(function (e) { return e.id === data.id; })[0];
+        st.events = st.events.filter(function (e) { return e.id !== data.id && !(de && de.series && data.scope === "all" && e.series === de.series); });
         break;
+      }
       case "search_recipes": {
         var q = String(data.query || "").toLowerCase();
         return Promise.resolve({ recipes: st.recipes.filter(function (r) { return !q || r.name.toLowerCase().indexOf(q) >= 0; }).map(function (r) { return { slug: r.slug, name: r.name, recipe_id: r.slug }; }) });
@@ -347,6 +406,23 @@
   };
   MockBackend.prototype._done = function (r) { this.save(); if (this.onChange) this.onChange(this.publicState()); return r; };
 
+  // Vorschau: Serientermin in einzelne Termine auflösen (vereinfacht, max. 1 Jahr)
+  function mockExpand(ev) {
+    if (!ev.rrule) return [{ start: ev.start, end: ev.end }];
+    var m = {}; ev.rrule.split(";").forEach(function (x) { var kv = x.split("="); m[kv[0]] = kv[1]; });
+    var s0 = parse(ev.start), dur = parse(ev.end) - s0, out = [], n = Number(m.INTERVAL) || 1;
+    var timeS = String(ev.start).slice(10), timeE = String(ev.end).slice(10);
+    var days = m.BYDAY ? m.BYDAY.split(",").map(function (d) { return ["MO", "TU", "WE", "TH", "FR", "SA", "SU"].indexOf(d); }) : [wd(s0)];
+    var until = m.UNTIL ? m.UNTIL.slice(0, 4) + "-" + m.UNTIL.slice(4, 6) + "-" + m.UNTIL.slice(6, 8) : iso(addDays(s0, 365));
+    for (var i = 0; i < 400 && out.length < (Number(m.COUNT) || 999); i++) {
+      var d = addDays(s0, i), ds = iso(d);
+      if (ds > until) break;
+      var ok = m.FREQ === "DAILY" ? i % n === 0 : m.FREQ === "WEEKLY" ? days.indexOf(wd(d)) >= 0 && Math.round((weekStart(d) - weekStart(s0)) / 6048e5) % n === 0 : m.FREQ === "MONTHLY" ? d.getDate() === s0.getDate() : d.getDate() === s0.getDate() && d.getMonth() === s0.getMonth();
+      if (ok) out.push({ start: ds + timeS, end: iso(new Date(d.getTime() + dur)) + timeE });
+    }
+    return out;
+  }
+
   function recipeIngredients(st, slug) {
     var r = st.recipes.filter(function (x) { return x.slug === slug; })[0];
     return r ? r.ingredients.slice() : [];
@@ -371,7 +447,7 @@
         pin: "1234",
         theme: "hell",
         title: "Familienzentrale",
-        modules: { kalender: true, aufgaben: true, punkte: true, essen: true, einkauf: true, wartung: true, muell: true, bilderrahmen: true },
+        modules: { schule: true, kalender: true, aufgaben: true, punkte: true, essen: true, einkauf: true, wartung: true, muell: true, bilderrahmen: true },
         lock_calendar: true,
         frame: { enabled: true, idle_min: 3, interval_s: 10, night_from: "22:00", night_to: "06:00", media: "media-source://media_source/local/familie" },
         notify: { telegram: "", sonos: [], quiet_from: "21:00", quiet_to: "07:00", waste_time: "19:00", waste_targets: ["telegram", "sonos"] },
@@ -451,6 +527,18 @@
         { id: "m3", name: "Lüftungsfilter wechseln", icon: "🌬️", every: 6, unit: "monate", warn_days: 14, last: d(-100), next: d(80), note: "" },
         { id: "m4", name: "Thermostat-Batterien", icon: "🔋", every: 1, unit: "jahre", warn_days: 30, last: d(-300), next: d(65), note: "" }
       ],
+      timetable: [
+        { id: "l1", person: "p3", subject: "Mathe", icon: "➗", days: [0, 2, 4], start: "08:00", end: "08:45" },
+        { id: "l2", person: "p3", subject: "Deutsch", icon: "📖", days: [0, 1, 3], start: "08:50", end: "09:35" },
+        { id: "l3", person: "p3", subject: "Turnen", icon: "🤸", days: [1], start: "13:30", end: "15:05", room: "Turnhalle" },
+        { id: "l4", person: "p4", subject: "Kindergarten", icon: "🧸", days: [0, 1, 2, 3, 4], start: "08:15", end: "11:45" }
+      ],
+      activities: [
+        { id: "x1", name: "Fussball", icon: "⚽", persons: ["p3"], days: [2], start: "17:00", end: "18:30", location: "Sportplatz", bring: "Schienbeinschoner", every_weeks: 1, pause_holidays: true },
+        { id: "x2", name: "Schwimmkurs", icon: "🏊", persons: ["p4"], days: [5], start: "10:00", end: "10:45", location: "Hallenbad", bring: "Badetuch", every_weeks: 1, pause_holidays: true },
+        { id: "x3", name: "Klavier", icon: "🎹", persons: ["p3"], days: [3], start: "15:00", end: "15:30", every_weeks: 2, first: d(0), pause_holidays: true }
+      ],
+      holidays: [],
       waste: [
         { id: "a1", name: "Kehricht", icon: "🗑️", color: "#5F6B7A", rule: { type: "weekly", weekday: 1, every_weeks: 1, start: d(0) }, extra_dates: [], skip_dates: [] },
         { id: "a2", name: "Papier", icon: "📰", color: "#2E86DE", rule: { type: "weekly", weekday: 2, every_weeks: 4, start: d(0) }, extra_dates: [], skip_dates: [] },
@@ -588,7 +676,7 @@ label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--mu
 ";
 
   var NAV = [
-    ["start", "🏠", "Start"], ["kalender", "📅", "Kalender"], ["aufgaben", "✅", "Aufgaben"], ["punkte", "⭐", "Punkte"],
+    ["start", "🏠", "Start"], ["kalender", "📅", "Kalender"], ["aufgaben", "✅", "Aufgaben"], ["schule", "🎒", "Schule & Freizeit"], ["punkte", "⭐", "Punkte"],
     ["essen", "🍽️", "Essen"], ["einkauf", "🛒", "Einkauf"], ["wartung", "🔧", "Wartung"], ["muell", "🗑️", "Müll"]
   ];
 
@@ -708,7 +796,14 @@ label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--mu
         rts.forEach((r) => { var pr = Logic.routineProgress(r, p.id); done += pr[0]; total += pr[1]; });
         var open = tasks.filter((x) => !Logic.taskDoneFor(x, p.id));
         var bodyHtml = "";
-        bodyHtml += evs.length ? evs.map((e) => "<div class='ev'><span class='bar' style='background:" + esc(p.color) + "'></span><span class='t'>" + this._evTime(e) + "</span><span>" + esc(e.title) + "</span></div>").join("") : "<div class='empty'>Keine Termine heute</div>";
+        var rows = evs.map((e) => ({ t: this._evTime(e), html: esc(e.title) }));
+        if (st.settings.modules.schule !== false) {
+          var les = Logic.lessonsOn(st, p.id, t);
+          if (les.length) rows.push({ t: les[0].start, html: "🏫 Schule bis " + esc(les[les.length - 1].end) });
+          Logic.activitiesOn(st, t, p.id).forEach((a) => rows.push({ t: a.start || "", html: esc(a.icon || "🎯") + " " + esc(a.name) + (a.bring ? " <span class='muted small'>· " + esc(a.bring) + "</span>" : "") }));
+        }
+        rows.sort((a, b) => (a.t === "ganzt." ? "" : a.t) < (b.t === "ganzt." ? "" : b.t) ? -1 : 1);
+        bodyHtml += rows.length ? rows.map((r) => "<div class='ev'><span class='bar' style='background:" + esc(p.color) + "'></span><span class='t'>" + esc(r.t) + "</span><span>" + r.html + "</span></div>").join("") : "<div class='empty'>Keine Termine heute</div>";
         if (total) {
           bodyHtml += "<div class='row small muted'><span>Heute " + done + "/" + total + "</span></div><div class='prog'><i style='width:" + Math.round(100 * done / total) + "%;background:" + esc(p.color) + "'></i></div>";
           rts.forEach((r) => {
@@ -794,7 +889,8 @@ label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--mu
           var waste = this.state.settings.modules.muell !== false ? this.state.waste.filter((w) => Logic.wasteDates(w, 1, d)[0] === d) : [];
           html += "<div class='day " + (d === t ? "today" : "") + "'><div class='dh'><span>" + WD[i] + "</span><span class='muted'>" + parse(d).getDate() + ".</span></div>" +
             waste.map((w) => "<div class='evc' style='background:" + esc(w.color) + "22;color:inherit'>" + esc(w.icon) + " " + esc(w.name) + "</div>").join("") +
-            evs.map((e) => { var c = e.person ? this.color(e.person) : "#6c5ce7"; return "<div class='evc' data-act='event' data-id='" + esc(e.id) + "' style='background:" + esc(c) + ";color:" + textOn(c) + "'><b>" + this._evTime(e) + "</b> " + esc(e.title) + "</div>"; }).join("") + "</div>";
+            evs.map((e) => { var c = e.person ? this.color(e.person) : "#6c5ce7"; return "<div class='evc' data-act='event' data-id='" + esc(e.id) + "' style='background:" + esc(c) + ";color:" + textOn(c) + "'><b>" + this._evTime(e) + "</b> " + (e.rrule || e.recurrence_id ? "🔁 " : "") + esc(e.title) + "</div>"; }).join("") +
+            (this.state.settings.modules.schule !== false ? Logic.activitiesOn(this.state, d).filter((a) => (a.persons || []).some((pid) => !hid[pid])).map((a) => { var c = this.color((a.persons || [])[0]); return "<div class='evc' data-act='nav' data-v='schule' style='border:2px dashed " + esc(c) + ";background:transparent'><b>" + esc(a.start || "") + "</b> " + esc(a.icon || "🎯") + " " + esc(a.name) + " <span class='muted'>" + (a.persons || []).map((pid) => esc((this.person(pid) || {}).name || "")).join(", ") + "</span></div>"; }).join("") : "") + "</div>";
         }
         html += "</div>";
       } else {
@@ -846,6 +942,55 @@ label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--mu
         var names = (ids, sep) => (ids || []).map((id) => esc((this.person(id) || {}).name || "?")).join(sep || ", ");
         html += "<div class='card' style='margin-bottom:14px'><h3>🔁 Routinen</h3><div class='list'>" + (st.routines.map((r) => "<div class='task'><span class='ic'>" + esc(r.icon || "•") + "</span><span class='nm'><b>" + esc(r.name) + "</b><br><span class='small muted'>" + ((TIMES.filter((x) => x[0] === r.time)[0] || ["", ""])[1]) + " · " + daysText(r.days) + " · " + names(r.persons) + " · " + ((r.steps || []).length ? (r.steps.length + " Schritte") : "ohne Schritte") + (r.needs_approval ? " · mit Bestätigung" : "") + "</span></span><button class='btn sec sm' data-act='edit' data-col='routines' data-id='" + r.id + "'>✏️</button></div>").join("") || "<div class='empty'>Noch keine Routinen</div>") + "</div></div>";
         html += "<div class='card'><h3>🧹 Aufgaben</h3><div class='list'>" + (st.tasks.map((x) => "<div class='task'><span class='ic'>" + esc(x.icon || "•") + "</span><span class='nm'><b>" + esc(x.name) + "</b><br><span class='small muted'>" + esc(Logic.repeatText(x.repeat)) + " · " + names(x.persons, Logic.taskMode(x) === "reihum" ? " ↻ " : ", ") + " · " + Logic.modeText(x.mode) + (x.points ? " · ⭐" + x.points : "") + (x.needs_approval ? " · mit Bestätigung" : "") + "</span></span><button class='btn sec sm' data-act='edit' data-col='tasks' data-id='" + x.id + "'>✏️</button></div>").join("") || "<div class='empty'>Noch keine Aufgaben</div>") + "</div></div>";
+      }
+      return html;
+    }
+
+    v_schule() {
+      var st = this.state, tab = this.sub.school || "stundenplan", t = todayIso();
+      var kids = st.persons.filter((p) => p.role === "kind");
+      var plist = kids.length ? kids : st.persons;
+      var sel = this.sub.schoolP && this.person(this.sub.schoolP) ? this.sub.schoolP : (plist[0] || {}).id;
+      var addBtn = { stundenplan: ["timetable", "＋ Lektion"], freizeit: ["activities", "＋ Aktivität"], ferien: ["holidays", "＋ Ferien"] }[tab];
+      var html = "<div class='head'><h1>Schule & Freizeit</h1><span class='grow'></span><button class='btn' data-act='edit' data-col='" + addBtn[0] + "'>" + addBtn[1] + "</button></div>";
+      html += "<div class='tabs'>" + [["stundenplan", "🏫 Stundenplan"], ["freizeit", "⚽ Sport & Freizeit"], ["ferien", "🏖️ Ferien"]].map((x) => "<button data-act='schooltab' data-v='" + x[0] + "' class='" + (tab === x[0] ? "on" : "") + "'>" + x[1] + "</button>").join("") + "</div>";
+      var hol = (st.holidays || []).filter((h) => h.from <= t && t <= h.to)[0];
+      if (hol) html += "<div class='card' style='margin-bottom:14px'>🏖️ Zurzeit: <b>" + esc(hol.name) + "</b> bis " + fmtDate(hol.to) + "</div>";
+      if (tab === "stundenplan") {
+        html += "<div class='row' style='flex-wrap:wrap;margin-bottom:12px'>" + plist.map((p) => "<button class='pill pchip " + (p.id === sel ? "" : "off") + "' data-act='schoolp' data-v='" + p.id + "' style='background:" + esc(p.color) + ";color:" + textOn(p.color) + ";text-decoration:none'>" + esc(p.name) + "</button>").join("") + "</div>";
+        var les = (st.timetable || []).filter((l) => l.person === sel);
+        var maxDay = les.some((l) => (l.days || []).map(Number).some((x) => x > 4)) ? 7 : 5;
+        var ws = weekStart(new Date());
+        html += "<div class='week' style='grid-template-columns:repeat(" + maxDay + ",minmax(0,1fr))'>";
+        for (var i = 0; i < maxDay; i++) {
+          var d = iso(addDays(ws, i));
+          var dl = les.filter((l) => (l.days || []).map(Number).indexOf(i) >= 0).sort((a, b) => String(a.start) < String(b.start) ? -1 : 1);
+          html += "<div class='day " + (d === t ? "today" : "") + "'><div class='dh'><span>" + WD_LANG[i] + "</span></div>" +
+            (dl.map((l) => "<div class='evc' data-act='edit' data-col='timetable' data-id='" + l.id + "' style='background:var(--bg);color:inherit;cursor:pointer'><b>" + esc(l.start) + "–" + esc(l.end) + "</b><br>" + esc(l.icon || "") + " " + esc(l.subject) + (l.room ? "<br><span class='muted'>" + esc(l.room) + "</span>" : "") + "</div>").join("") || "<div class='empty small'>frei</div>") + "</div>";
+        }
+        html += "</div>";
+        if (!les.length) html += "<div class='card empty' style='margin-top:12px'>Noch kein Stundenplan. Mit „＋ Lektion“ trägst du Fach, Tage und Zeit ein, z. B. Mathe Mo + Mi 08:00–08:45.</div>";
+      } else if (tab === "freizeit") {
+        var acts = (st.activities || []).slice().sort((a, b) => ((a.days || [9])[0] - (b.days || [9])[0]) || (String(a.start) < String(b.start) ? -1 : 1));
+        html += "<div class='grid' style='grid-template-columns:repeat(auto-fill,minmax(260px,1fr))'>" + (acts.map((a) => {
+          var c = this.color((a.persons || [])[0]);
+          var season = a.season_from || a.season_to ? "<br>Saison " + (a.season_from ? fmtDate(a.season_from) : "…") + " – " + (a.season_to ? fmtDate(a.season_to) : "…") : "";
+          return "<div class='card' style='border-left:8px solid " + esc(c) + "'><div class='row'><span style='font-size:30px'>" + esc(a.icon || "🎯") + "</span><div style='flex:1'><b style='font-size:17px'>" + esc(a.name) + "</b><div class='small muted'>" + (a.persons || []).map((pid) => esc((this.person(pid) || {}).name || "?")).join(", ") + "</div></div><button class='btn sec sm' data-act='edit' data-col='activities' data-id='" + a.id + "'>✏️</button></div>" +
+            "<div class='small' style='margin-top:6px'>" + daysText(a.days) + (Number(a.every_weeks) > 1 ? " (alle " + a.every_weeks + " Wochen)" : "") + " · " + esc(a.start || "") + (a.end ? "–" + esc(a.end) : "") + (a.location ? "<br>📍 " + esc(a.location) : "") + (a.bring ? "<br>🎒 " + esc(a.bring) : "") + season + (a.pause_holidays ? "<br><span class='muted'>pausiert in den Ferien</span>" : "") + "</div></div>";
+        }).join("") || "<div class='card empty'>Noch keine Aktivitäten. Mit „＋ Aktivität“ trägst du z. B. Fussball am Mittwoch 17:00–18:30 ein.</div>") + "</div>";
+        // Wochenübersicht
+        var ws2 = weekStart(new Date());
+        html += "<div class='card' style='margin-top:14px'><h3>Diese Woche</h3><div class='list'>";
+        var any = false;
+        for (var k = 0; k < 7; k++) {
+          var dd = iso(addDays(ws2, k)), aa = Logic.activitiesOn(st, dd);
+          if (!aa.length) continue; any = true;
+          html += "<div class='row'><b style='min-width:34px'>" + WD[k] + "</b><span>" + aa.map((a) => esc(a.start || "") + " " + esc(a.icon || "") + " " + esc(a.name) + " <span class='muted'>(" + (a.persons || []).map((pid) => esc((this.person(pid) || {}).name || "")).join(", ") + ")</span>").join(" · ") + "</span></div>";
+        }
+        html += (any ? "" : "<div class='empty'>Diese Woche keine Aktivitäten</div>") + "</div></div>";
+      } else {
+        var hs = (st.holidays || []).slice().sort((a, b) => a.from < b.from ? -1 : 1);
+        html += "<div class='card'><div class='list'>" + (hs.map((h) => "<div class='task'><span class='ic'>🏖️</span><span class='nm'><b>" + esc(h.name) + "</b><br><span class='small muted'>" + fmtDate(h.from) + " – " + fmtDate(h.to) + (h.to < t ? " · vorbei" : h.from <= t ? " · jetzt" : "") + "</span></span><button class='btn sec sm' data-act='edit' data-col='holidays' data-id='" + h.id + "'>✏️</button></div>").join("") || "<div class='empty'>Noch keine Ferien erfasst. In den Ferien wird der Stundenplan auf der Startseite ausgeblendet und Aktivitäten mit „pausiert in den Ferien“ fallen weg.</div>") + "</div></div>";
       }
       return html;
     }
@@ -963,6 +1108,8 @@ label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--mu
         }
         case "dayjump": this.sub.cal = "woche"; this.sub.calDate = v; this.render(); break;
         case "tasktab": this.sub.task = v; this.render(); break;
+        case "schooltab": this.sub.school = v; this.render(); break;
+        case "schoolp": this.sub.schoolP = v; this.render(); break;
         case "mealweek": this.sub.mealWeek = Number(v); this.render(); break;
         case "pp": this.sub.pp = v; this.render(); break;
         case "done": if (el.getAttribute("data-p")) { el.classList.add("on"); el.textContent = "✓"; } this._complete(id, el.getAttribute("data-p")); break;
@@ -1087,6 +1234,23 @@ label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--mu
           { k: "warn_days", l: "Vorwarnung (Tage vorher)", t: "number" }, { k: "next", l: "Nächster Termin", t: "date" },
           { k: "note", l: "Notiz", t: "textarea" }
         ], def: { icon: "🔧", every: 1, unit: "jahre", warn_days: 14, next: todayIso() } },
+        timetable: { title: "Lektion", fields: [
+          { k: "person", l: "Für", t: "select", o: personOpts }, { k: "subject", l: "Fach", t: "text" }, { k: "icon", l: "Symbol", t: "icon" },
+          { k: "days", l: "Tage", t: "days" }, { k: "start", l: "Von", t: "time" }, { k: "end", l: "Bis", t: "time" },
+          { k: "room", l: "Zimmer / Lehrperson (optional)", t: "text" }
+        ], def: { person: this.sub.schoolP || (st.persons.filter((p) => p.role === "kind")[0] || st.persons[0] || {}).id, icon: "📚", days: [], start: "08:00", end: "08:45" } },
+        activities: { title: "Aktivität", fields: [
+          { k: "name", l: "Name (z. B. Fussball, Klavier)", t: "text" }, { k: "icon", l: "Symbol", t: "icon" },
+          { k: "persons", l: "Wer?", t: "persons" }, { k: "days", l: "Tage", t: "days" },
+          { k: "start", l: "Von", t: "time" }, { k: "end", l: "Bis", t: "time" },
+          { k: "every_weeks", l: "alle … Wochen (1 = jede Woche)", t: "number" }, { k: "first", l: "Erster Termin (nur bei alle 2+ Wochen)", t: "date" },
+          { k: "location", l: "Ort", t: "text" }, { k: "bring", l: "Mitnehmen (z. B. Turnsack, Noten)", t: "text" },
+          { k: "season_from", l: "Saison von (optional)", t: "date" }, { k: "season_to", l: "Saison bis (optional)", t: "date" },
+          { k: "pause_holidays", l: "In den Ferien keine Aktivität", t: "toggle" }
+        ], def: { icon: "⚽", persons: [], days: [], start: "16:00", end: "17:00", every_weeks: 1, pause_holidays: true } },
+        holidays: { title: "Ferien / schulfrei", fields: [
+          { k: "name", l: "Name (z. B. Herbstferien)", t: "text" }, { k: "from", l: "Von", t: "date" }, { k: "to", l: "Bis", t: "date" }
+        ], def: { name: "Ferien", from: todayIso(), to: todayIso() } },
         waste: { title: "Müllart", fields: [
           { k: "name", l: "Name", t: "text" }, { k: "icon", l: "Symbol", t: "icon" }, { k: "color", l: "Farbe", t: "color" },
           { k: "rule.weekday", l: "Wochentag", t: "select", o: WD_LANG.map((w, i) => [String(i), w]) },
@@ -1100,6 +1264,9 @@ label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--mu
       var go = () => this.form((id ? "✏️ " : "＋ ") + spec.title, spec.fields, id ? item : JSON.parse(JSON.stringify(spec.def)), (v) => {
         var it = Object.assign(item, v);
         if (col === "waste") { it.rule = it.rule || {}; it.rule.type = "weekly"; it.rule.weekday = Number(it.rule.weekday); it.rule.every_weeks = Number(it.rule.every_weeks) || 1; }
+        if (col === "timetable" && !(it.days || []).length) { this.toast("Bitte mindestens einen Tag wählen"); return Promise.reject(new Error("tage")); }
+        if (col === "activities") { it.every_weeks = Number(it.every_weeks) || 1; if (!(it.days || []).length) { this.toast("Bitte mindestens einen Tag wählen"); return Promise.reject(new Error("tage")); } }
+        if (col === "holidays" && it.from > it.to) { this.toast("„Bis“ liegt vor „Von“"); return Promise.reject(new Error("datum")); }
         if (col === "maintenance") { it.every = Number(it.every) || 1; it.warn_days = Number(it.warn_days) || 0; }
         if (col === "rewards") it.cost = Number(it.cost) || 0;
         if (col === "tasks") { it.points = Number(it.points) || 0; it.done = it.done || {}; delete it.routine; delete it.rotate; }
@@ -1107,7 +1274,7 @@ label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--mu
         return this.act("save_item", { collection: col, item: it });
       }, id ? () => this.dialog("Löschen?", "<p>„" + esc(item.name) + "“ wirklich löschen?</p>", [["Abbrechen", "sec"], ["Löschen", "bad", () => this.act("delete_item", { collection: col, id: id })]]) : null);
       // Personen, Belohnungen und Wartung ändern nur Erwachsene
-      if (["persons", "rewards", "maintenance", "waste", "tasks", "routines"].indexOf(col) >= 0) this.pin(go); else go();
+      if (["persons", "rewards", "maintenance", "waste", "tasks", "routines", "timetable", "activities", "holidays"].indexOf(col) >= 0) this.pin(go); else go();
     }
 
     form(title, fields, vals, onSave, onDelete) {
@@ -1118,6 +1285,7 @@ label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--mu
         var v = get(state, f.k);
         var name = "data-k='" + f.k + "'";
         if (f.t === "pin") return "<label class='f'>" + esc(f.l) + "<input type='password' inputmode='numeric' pattern='[0-9]*' maxlength='4' autocomplete='off' " + name + "></label>";
+        if (f.t === "time") return "<label class='f'>" + esc(f.l) + "<input type='time' " + name + " value='" + esc(v == null ? "" : v) + "'></label>";
         if (f.t === "text" || f.t === "number" || f.t === "date") return "<label class='f'>" + esc(f.l) + "<input type='" + f.t + "' " + name + " value='" + esc(v == null ? "" : v) + "'></label>";
         if (f.t === "textarea") return "<label class='f'>" + esc(f.l) + "<textarea " + name + " rows='2'>" + esc(v || "") + "</textarea></label>";
         if (f.t === "color") return "<label class='f'>" + esc(f.l) + "<input type='color' " + name + " value='" + esc(v || "#888888") + "'></label>";
@@ -1235,21 +1403,30 @@ label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--mu
       var cal = [["", "Alle / Familie"]].concat(this.state.persons.map((p) => [p.id, p.name]));
       this.form("＋ Termin", [
         { k: "title", l: "Titel", t: "text" }, { k: "person", l: "Für", t: "select", o: cal }, { k: "date", l: "Datum", t: "date" },
-        { k: "allday", l: "Ganztägig", t: "toggle" }, { k: "from", l: "Von (HH:MM)", t: "text" }, { k: "to", l: "Bis (HH:MM)", t: "text" }
-      ], { date: this.sub.calDate || todayIso(), from: "09:00", to: "10:00" }, (v) => {
-        if (!v.title) return Promise.resolve();
+        { k: "allday", l: "Ganztägig", t: "toggle" }, { k: "from", l: "Von", t: "time" }, { k: "to", l: "Bis", t: "time" },
+        { k: "rr_freq", l: "🔁 Wiederholen", t: "select", o: [["", "nicht wiederholen"], ["DAILY", "täglich"], ["WEEKLY", "wöchentlich"], ["MONTHLY", "monatlich (gleicher Tag)"], ["YEARLY", "jährlich"]] },
+        { k: "rr_interval", l: "alle … (1 = jede/n, 2 = jede zweite …)", t: "number" },
+        { k: "rr_days", l: "an Wochentagen (nur bei wöchentlich, leer = Wochentag des Datums)", t: "days" },
+        { k: "rr_until", l: "Serie endet am (leer = ohne Ende)", t: "date" },
+        { k: "rr_count", l: "oder nach so vielen Terminen", t: "number" }
+      ], { date: this.sub.calDate || todayIso(), from: "09:00", to: "10:00", rr_interval: 1, rr_days: [] }, (v) => {
+        if (!v.title) { this.toast("Bitte einen Titel eingeben"); return Promise.reject(new Error("titel")); }
         var ev = { title: v.title, person: v.person || null, allday: !!v.allday };
         if (v.allday) { ev.start = v.date; ev.end = iso(addDays(parse(v.date), 1)); }
         else { ev.start = v.date + "T" + (v.from || "09:00") + ":00"; ev.end = v.date + "T" + (v.to || v.from || "10:00") + ":00"; }
-        return this.act("add_event", ev);
+        var rr = Logic.buildRrule(v, ev.allday);
+        if (rr) ev.rrule = rr;
+        return this.act("add_event", ev).then(() => this.toast(rr ? "🔁 Serientermin angelegt" : "✓ Termin angelegt"));
       });
     }
     _eventDlg(id) {
       var e = this.state.events.filter((x) => x.id === id)[0];
       if (!e) return;
       var p = this.person(e.person);
-      this.dialog(esc(e.title), "<p>" + (p ? this.av(p, "s") + " " + esc(p.name) + "<br>" : "") + fmtDate(e.start) + " · " + this._evTime(e) + (e.location ? "<br>📍 " + esc(e.location) : "") + "</p>",
-        [["🗑️ Löschen", "bad", () => { this.closeDialog(); (this.state.settings.lock_calendar ? this.pin.bind(this) : (f) => f())(() => this.act("delete_event", { id: id }).then(() => this.toast("🗑️ Termin gelöscht"))); return false; }], ["Schliessen", "sec"]]);
+      var series = !!(e.rrule || e.recurrence_id);
+      var del = (scope) => () => { this.closeDialog(); (this.state.settings.lock_calendar ? this.pin.bind(this) : (f) => f())(() => this.act("delete_event", { id: id, recurrence_id: e.recurrence_id || null, scope: scope }).then(() => this.toast(scope === "all" && series ? "🗑️ Serie gelöscht" : "🗑️ Termin gelöscht"))); return false; };
+      this.dialog(esc(e.title), "<p>" + (p ? this.av(p, "s") + " " + esc(p.name) + "<br>" : "") + fmtDate(e.start) + " · " + this._evTime(e) + (e.location ? "<br>📍 " + esc(e.location) : "") + (series ? "<br>🔁 " + esc(Logic.rruleText(e.rrule) || "Serientermin") : "") + "</p>",
+        (series ? [["🗑️ Nur diesen", "bad", del("one")], ["🗑️ Ganze Serie", "bad", del("all")]] : [["🗑️ Löschen", "bad", del("all")]]).concat([["Schliessen", "sec"]]));
     }
 
     _mealDlg(date, slot) {

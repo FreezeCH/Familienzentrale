@@ -2,7 +2,8 @@
 
 Ein Familienplaner als eigenes Panel in Home Assistant, für das Wand-Tablet und das Handy.
 
-- 📅 **Familienkalender:** Personen mit eigener Farbe und eigenem Foto, Wochen- und Monatsansicht
+- 📅 **Familienkalender:** Personen mit eigener Farbe und eigenem Foto, Wochen- und Monatsansicht, Serientermine
+- 🎒 **Schule & Freizeit:** Stundenplan, Sport und Hobbys mit „Mitnehmen“-Hinweis, Ferien
 - ✅ **Aufgaben und Routinen:** täglich, an Wochentagen, im Intervall oder einmalig, auch reihum. Kinder haken am Display selbst ab.
 - ⭐ **Punkte und Belohnungen:** Belohnungs-Shop, Bestätigung durch die Eltern, Punkteverlauf
 - 🍽️ **Essensplan aus Mealie:** Zutaten gehen an die Bring-Einkaufsliste, automatisch, auf Knopfdruck oder nie
@@ -14,7 +15,7 @@ Ein Familienplaner als eigenes Panel in Home Assistant, für das Wand-Tablet und
 Alles wird in der Oberfläche eingestellt. Es gibt kein YAML.
 
 ## Status
-In Entwicklung (Version 0.4.4).
+In Entwicklung (Version 0.5.0).
 
 | Teil | Stand |
 |---|---|
@@ -24,6 +25,8 @@ In Entwicklung (Version 0.4.4).
 | Symbolauswahl, Kalender nach Personen filtern | fertig |
 | Wartung, Müll (Anzeige und Erfassung) | fertig |
 | Einkauf über eine To-do-Liste (z. B. Bring) | fertig |
+| Schule & Freizeit: Stundenplan pro Kind, Sport- und Freizeitaktivitäten (auch alle 2 Wochen, Saison, Pause in den Ferien), Ferien | fertig |
+| Serientermine (täglich, wöchentlich mit Wochentagen, monatlich, jährlich; Ende nach Datum oder Anzahl) | fertig |
 | Essensplan mit Mealie: Wochenplan lesen und schreiben, Rezeptsuche mit Bildern, Zutaten mit Mengen an die Einkaufsliste, Gerichtstypen wählbar | fertig |
 | Erinnerungen über Telegram und Sonos | folgt |
 | Bilderrahmen | folgt |

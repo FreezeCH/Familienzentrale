@@ -1,7 +1,7 @@
 """Konstanten der Familienzentrale."""
 
 DOMAIN = "familienzentrale"
-VERSION = "0.4.4"
+VERSION = "0.5.0"
 
 STORAGE_KEY = "familienzentrale.daten"
 STORAGE_VERSION = 1
@@ -17,7 +17,7 @@ EVENT_REWARD_REDEEMED = "familienzentrale_belohnung_eingeloest"
 EVENT_MAINT_DONE = "familienzentrale_wartung_erledigt"
 
 # Sammlungen, die das Panel über save_item / delete_item bearbeiten darf
-COLLECTIONS = ("persons", "tasks", "routines", "rewards", "maintenance", "waste")
+COLLECTIONS = ("persons", "tasks", "routines", "rewards", "maintenance", "waste", "timetable", "activities", "holidays")
 
 # Wie lange eine Entsperrung mit der Eltern-PIN gilt (Sekunden)
 PIN_UNLOCK_SECONDS = 300

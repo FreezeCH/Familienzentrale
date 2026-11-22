@@ -25,6 +25,7 @@ export async function run() {
   const id = (d, name) => d.data.persons.find((p) => p.name === name).id;
   const todayIso = (() => { const t = new Date(); return t.getFullYear() + "-" + String(t.getMonth() + 1).padStart(2, "0") + "-" + String(t.getDate()).padStart(2, "0"); })();
   const wdToday = (new Date().getDay() + 6) % 7;
+  const iso7 = (n) => { const t = new Date(Date.now() + n * 86400000); return t.getFullYear() + "-" + String(t.getMonth() + 1).padStart(2, "0") + "-" + String(t.getDate()).padStart(2, "0"); };
   const chg = async (sel, v) => { const e = q(sel); if (e.type === "checkbox") e.checked = v; else e.value = v; e.dispatchEvent(new Event("change", { bubbles: true })); await w(450); };
 
   // 1 Erststart
@@ -189,6 +190,70 @@ export async function run() {
   check("Termin gelöscht", !d.calendars["calendar.vater"].some((e) => e.summary === "Velo-Service"));
   const n0 = qa(".evc[data-act=event]").length; await click(`[data-act=calfilter][data-v='${A}']`); const n1 = qa(".evc[data-act=event]").length; await click(`[data-act=calfilter][data-v='${A}']`);
   check("Kalenderfilter blendet Person aus", n1 === n0 - 1, [n0, n1]);
+
+  // 8b Serientermine
+  await click("[data-act=addevent]"); await pinIf();
+  set("title", "Turnen Serie"); set("person", A); set("date", todayIso); set("from", "16:00"); set("to", "17:00");
+  set("rr_freq", "WEEKLY"); q(".dlg [data-wd='0']").click(); q(".dlg [data-wd='2']").click(); set("rr_count", 4);
+  await save(); await w(300);
+  d = await dbg();
+  const serie = d.calendars["calendar.familie"].find((e) => e.summary === "Turnen Serie");
+  check("Serie angelegt (RRULE)", serie && serie.rrule === "FREQ=WEEKLY;BYDAY=MO,WE;COUNT=4", serie);
+  let st2 = await el.backend.load();
+  let occ = st2.events.filter((e) => e.title === "Turnen Serie");
+  check("Serie: 4 Termine sichtbar, alle beim Kind", occ.length === 4 && occ.every((e) => e.person === A && e.rrule), occ.map((e) => e.start));
+  await nav("kalender"); await click("[data-act=calnav][data-v='1']");
+  const sev = qa(".evc[data-act=event]").find((e) => e.textContent.includes("Turnen Serie"));
+  check("Serie im Kalender mit 🔁", sev && sev.textContent.includes("🔁"));
+  sev.click(); await w();
+  check("Dialog zeigt Wiederholung", (q(".dlg") || {}).textContent.includes("wöchentlich am Mo, Mi"), (q(".dlg") || {}).textContent);
+  const btns = qa(".dlg [data-b]").map((b) => b.textContent);
+  check("Löschen: nur diesen / ganze Serie", btns.some((x) => x.includes("Nur diesen")) && btns.some((x) => x.includes("Ganze Serie")), btns);
+  qa(".dlg [data-b]")[0].click(); await w(400); await pinIf(); await w(300);
+  st2 = await el.backend.load(); occ = st2.events.filter((e) => e.title === "Turnen Serie");
+  check("Nur diesen gelöscht: 3 übrig", occ.length === 3, occ.length);
+  await el.backend.load().then((s3) => { el.state = s3; el.render(); });
+  const sev2 = qa(".evc[data-act=event]").find((e) => e.textContent.includes("Turnen Serie")) || (await click("[data-act=calnav][data-v='0']"), qa(".evc[data-act=event]").find((e) => e.textContent.includes("Turnen Serie")));
+  sev2.click(); await w(); qa(".dlg [data-b]")[1].click(); await w(400); await pinIf(); await w(300);
+  st2 = await el.backend.load();
+  check("Ganze Serie gelöscht", !st2.events.some((e) => e.title === "Turnen Serie"));
+  await click("[data-act=calnav][data-v='0']");
+
+  // 8c Schule & Freizeit
+  await nav("schule");
+  check("Menüpunkt Schule & Freizeit", txt().includes("Stundenplan") && txt().includes("Sport & Freizeit"));
+  await click("[data-act=edit][data-col=timetable]:not([data-id])"); await pinIf();
+  set("person", A); set("subject", "Mathe"); q(`.dlg [data-wd='${wdToday}']`).click(); set("start", "08:00"); set("end", "12:00");
+  await save();
+  d = await dbg();
+  check("Lektion gespeichert", d.data.timetable.length === 1 && d.data.timetable[0].days.includes(wdToday));
+  check("Stundenplan zeigt Lektion", txt().includes("Mathe") && txt().includes("08:00–12:00"));
+  await click("[data-act=schooltab][data-v=freizeit]");
+  await click("[data-act=edit][data-col=activities]:not([data-id])"); await pinIf();
+  set("name", "Fussball"); qa(".dlg [data-t=persons]").forEach((c) => (c.checked = c.value === A)); q(`.dlg [data-wd='${wdToday}']`).click(); set("start", "17:00"); set("end", "18:30"); set("bring", "Schienbeinschoner");
+  await save();
+  await click("[data-act=edit][data-col=activities]:not([data-id])"); await pinIf();
+  set("name", "Klavier"); qa(".dlg [data-t=persons]").forEach((c) => (c.checked = c.value === A)); q(`.dlg [data-wd='${wdToday}']`).click(); set("start", "15:00"); set("every_weeks", 2);
+  set("first", iso7(-7)); await save();
+  d = await dbg();
+  check("2 Aktivitäten gespeichert", d.data.activities.length === 2);
+  check("Wochenübersicht zeigt Fussball", txt().includes("Diese Woche") && txt().includes("Fussball"));
+  await nav("start");
+  const colA = () => qa(".pcol").find((c) => c.querySelector(".pname").textContent === "Kind A").textContent;
+  check("Startseite: Schule bis 12:00", colA().includes("Schule bis 12:00"), colA());
+  check("Startseite: Fussball mit Mitnehmen", colA().includes("Fussball") && colA().includes("Schienbeinschoner"));
+  check("Alle 2 Wochen: Klavier diese Woche nicht", !colA().includes("Klavier"));
+  await nav("kalender");
+  check("Kalender zeigt Aktivität", qa(".day.today .evc").some((e) => e.textContent.includes("Fussball")));
+  await nav("schule"); await click("[data-act=schooltab][data-v=ferien]");
+  await click("[data-act=edit][data-col=holidays]:not([data-id])"); await pinIf();
+  set("name", "Herbstferien"); set("from", iso7(-1)); set("to", iso7(3)); await save();
+  check("Ferien-Hinweis", txt().includes("Zurzeit") && txt().includes("Herbstferien"));
+  await nav("start");
+  check("In den Ferien: keine Schule, Fussball pausiert", !colA().includes("Schule bis") && !colA().includes("Fussball"), colA());
+  d = await dbg();
+  await el.backend.act("delete_item", { collection: "holidays", id: d.data.holidays[0].id, _pin: el._pinToken });
+  await el.backend.load().then((s3) => { el.state = s3; el.render(); });
 
   // 9 Einkauf
   await nav("einkauf");

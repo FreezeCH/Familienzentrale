@@ -43,6 +43,7 @@ DEFAULT_DATA: dict[str, Any] = {
         "theme": "hell",
         "title": "Familienzentrale",
         "modules": {
+            "schule": True,
             "kalender": True,
             "aufgaben": True,
             "punkte": True,
@@ -84,6 +85,10 @@ DEFAULT_DATA: dict[str, Any] = {
     "waste": [],
     "meals": {},
     "meal_servings": {},
+    # Schule & Freizeit
+    "timetable": [],   # {id, person, days[], start, end, subject, icon, room}
+    "activities": [],  # {id, name, icon, persons[], days[], start, end, location, bring, every_weeks, first, season_from, season_to, pause_holidays}
+    "holidays": [],    # {id, name, from, to}
 }
 
 # Aktionen, die nur mit gültiger Entsperrung (Eltern-PIN) erlaubt sind
@@ -350,6 +355,8 @@ class FamilienzentraleHub:
                         "allday": allday,
                         "start": ev.start.isoformat() if allday else dt_util.as_local(ev.start).replace(tzinfo=None).isoformat(),
                         "end": ev.end.isoformat() if allday else dt_util.as_local(ev.end).replace(tzinfo=None).isoformat(),
+                        "rrule": getattr(ev, "rrule", None),
+                        "recurrence_id": getattr(ev, "recurrence_id", None),
                     }
                 )
         events.sort(key=lambda e: e["start"])
@@ -370,6 +377,28 @@ class FamilienzentraleHub:
             # Person ohne eigenen Kalender: Termin im Familienkalender, Person in der Beschreibung merken
             p = self._find("persons", tag_person)
             data["description"] = f"Für {p.get('name') if p else ''} {PERSON_TAG}{tag_person}]"
+        rrule = str(d.get("rrule") or "").strip()
+        if rrule:
+            # Serientermin: direkt über die Kalender-Entität (die Aktion calendar.create_event kennt keine Wiederholung)
+            ent = self._component_entity("calendar", target)
+            if ent is None or not hasattr(ent, "async_create_event"):
+                raise HomeAssistantError("Dieser Kalender kann keine Termine anlegen")
+            kw: dict[str, Any] = {"summary": data["summary"], "rrule": rrule.removeprefix("RRULE:")}
+            if data.get("description"):
+                kw["description"] = data["description"]
+            if d.get("allday"):
+                kw["dtstart"] = date.fromisoformat(str(d["start"])[:10])
+                kw["dtend"] = date.fromisoformat(str(d["end"])[:10])
+            else:
+                kw["dtstart"] = dt_util.as_local(datetime.fromisoformat(str(d["start"])).replace(tzinfo=dt_util.now().tzinfo))
+                kw["dtend"] = dt_util.as_local(datetime.fromisoformat(str(d["end"])).replace(tzinfo=dt_util.now().tzinfo))
+            try:
+                await ent.async_create_event(**kw)
+            except HomeAssistantError:
+                raise
+            except Exception as err:  # noqa: BLE001
+                raise HomeAssistantError(f"Serientermin nicht möglich in diesem Kalender: {err}") from err
+            return
         if d.get("allday"):
             data["start_date"] = str(d["start"])[:10]
             data["end_date"] = str(d["end"])[:10]
@@ -378,12 +407,17 @@ class FamilienzentraleHub:
             data["end_date_time"] = str(d["end"])
         await self.hass.services.async_call("calendar", "create_event", data, target={"entity_id": target}, blocking=True)
 
-    async def _async_delete_event(self, event_id: str) -> None:
+    async def _async_delete_event(self, event_id: str, recurrence_id: str | None = None, scope: str = "all") -> None:
         entity_id, uid, _ = (event_id.split("|") + ["", "", ""])[:3]
         ent = self._component_entity("calendar", entity_id)
         if ent is None or not uid or not hasattr(ent, "async_delete_event"):
             raise HomeAssistantError("Dieser Termin kann hier nicht gelöscht werden")
-        await ent.async_delete_event(uid)
+        if scope == "one" and recurrence_id:
+            await ent.async_delete_event(uid, recurrence_id=recurrence_id)
+        elif scope == "future" and recurrence_id:
+            await ent.async_delete_event(uid, recurrence_id=recurrence_id, recurrence_range="THISANDFUTURE")
+        else:
+            await ent.async_delete_event(uid)
 
     # ---------- Einkauf (To-do-Liste, z. B. Bring) ----------
     def _shopping_list(self) -> str:
@@ -598,7 +632,7 @@ class FamilienzentraleHub:
             self.invalidate_events()
 
         elif action == "delete_event":
-            await self._async_delete_event(str(data.get("id", "")))
+            await self._async_delete_event(str(data.get("id", "")), data.get("recurrence_id"), str(data.get("scope") or "all"))
             self.invalidate_events()
 
         elif action == "shopping_add":

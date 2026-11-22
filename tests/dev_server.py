@@ -52,8 +52,52 @@ class FakeTodo:
 
 
 class CalEvent:
-    def __init__(self, uid, summary, start, end, location=None, description=None):
+    def __init__(self, uid, summary, start, end, location=None, description=None, rrule=None, recurrence_id=None):
         self.uid, self.summary, self.start, self.end, self.location, self.description = uid, summary, start, end, location, description
+        self.rrule, self.recurrence_id = rrule, recurrence_id
+        self.exdates: set = set()
+
+
+def _expand(ev, win_start, win_end):
+    """Sehr einfache RRULE-Auflösung für Tests (DAILY/WEEKLY/MONTHLY/YEARLY, INTERVAL, BYDAY, COUNT, UNTIL)."""
+    m = dict(x.split("=", 1) for x in ev.rrule.split(";") if "=" in x)
+    n = int(m.get("INTERVAL", 1))
+    days = ["MO", "TU", "WE", "TH", "FR", "SA", "SU"]
+    byday = [days.index(d) for d in m["BYDAY"].split(",")] if "BYDAY" in m else None
+    s0 = ev.start
+    d0 = s0.date() if isinstance(s0, datetime) else s0
+    dur = ev.end - ev.start
+    until = None
+    if "UNTIL" in m:
+        u = m["UNTIL"]
+        until = date(int(u[:4]), int(u[4:6]), int(u[6:8]))
+    count = int(m["COUNT"]) if "COUNT" in m else None
+    out, k = [], 0
+    for i in range(0, 800):
+        d = d0 + timedelta(days=i)
+        if until and d > until:
+            break
+        f = m.get("FREQ")
+        if f == "DAILY":
+            ok = i % n == 0
+        elif f == "WEEKLY":
+            wk = ((d - timedelta(days=d.weekday())) - (d0 - timedelta(days=d0.weekday()))).days // 7
+            ok = d.weekday() in (byday or [d0.weekday()]) and wk % n == 0
+        elif f == "MONTHLY":
+            ok = d.day == d0.day
+        else:
+            ok = d.day == d0.day and d.month == d0.month
+        if not ok:
+            continue
+        k += 1
+        if count and k > count:
+            break
+        start = datetime.combine(d, s0.timetz()) if isinstance(s0, datetime) else d
+        rid = start.strftime("%Y%m%dT%H%M%S") if isinstance(start, datetime) else start.strftime("%Y%m%d")
+        if rid in ev.exdates:
+            continue
+        out.append(CalEvent(ev.uid, ev.summary, start, start + dur, ev.location, ev.description, ev.rrule, rid))
+    return out
 
 
 class FakeCalendar:
@@ -61,17 +105,30 @@ class FakeCalendar:
         self.events: list[CalEvent] = []
         self._n = 0
 
-    def add(self, summary, start, end, description=None):
+    def add(self, summary, start, end, description=None, rrule=None):
         self._n += 1
-        self.events.append(CalEvent(f"e{self._n}", summary, start, end, description=description))
+        self.events.append(CalEvent(f"e{self._n}", summary, start, end, description=description, rrule=rrule))
+
+    async def async_create_event(self, **kw):
+        self.add(kw["summary"], kw["dtstart"], kw["dtend"], kw.get("description"), kw.get("rrule"))
 
     async def async_get_events(self, hass, start, end):
         def as_dt(x):
             return x if isinstance(x, datetime) else datetime(x.year, x.month, x.day).astimezone()
 
-        return [e for e in self.events if as_dt(e.end) >= start and as_dt(e.start) <= end]
+        res = []
+        for e in self.events:
+            for occ in (_expand(e, start, end) if e.rrule else [e]):
+                if as_dt(occ.end) >= start and as_dt(occ.start) <= end:
+                    res.append(occ)
+        return res
 
     async def async_delete_event(self, uid, recurrence_id=None, recurrence_range=None):
+        if recurrence_id:
+            for e in self.events:
+                if e.uid == uid:
+                    e.exdates.add(recurrence_id)
+            return
         self.events = [e for e in self.events if e.uid != uid]
 
 
@@ -269,7 +326,7 @@ def run(coro):
 
 
 def debug():
-    cal = {k: [{"uid": e.uid, "summary": e.summary, "start": str(e.start), "description": e.description} for e in v.events] for k, v in HASS.data["calendar"].entities.items()}
+    cal = {k: [{"uid": e.uid, "summary": e.summary, "start": str(e.start), "description": e.description, "rrule": e.rrule, "exdates": sorted(e.exdates)} for e in v.events] for k, v in HASS.data["calendar"].entities.items()}
     todo = {k: [{"uid": i.uid, "summary": i.summary, "status": i.status.value, "description": getattr(i, "description", None)} for i in v.todo_items] for k, v in HASS.data["todo"].entities.items()}
     plans = [{"id": p["mealplan_id"], "type": p["entry_type"].value, "date": str(p["mealplan_date"]), "title": p["title"], "recipe": (p["recipe"] or {}).get("name")} for p in HASS.mealie.plans]
     return {"mealie": plans, "data": HUB.data, "calendars": cal, "todo": todo, "events": HASS.bus.fired, "service_calls": HASS.services.calls, "stored": fake_storage._MEM}
