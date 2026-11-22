@@ -88,6 +88,90 @@ def _comp(ev: Any) -> Any:
     return comp
 
 
+def _vevents(ev: Any) -> list[Any]:
+    inst = getattr(ev, "icalendar_instance", None)
+    subs = getattr(inst, "subcomponents", None) if inst is not None else None
+    if not subs:
+        return [_comp(ev)]
+    return [c for c in subs if getattr(c, "name", "") == "VEVENT"]
+
+
+def _master(ev: Any) -> Any:
+    """Der Serien-Master (VEVENT ohne RECURRENCE-ID)."""
+    for c in _vevents(ev):
+        if "RECURRENCE-ID" not in c:
+            return c
+    return _comp(ev)
+
+
+def _same(a: Any, b: Any) -> bool:
+    if isinstance(a, datetime) and isinstance(b, datetime):
+        if (a.tzinfo is None) != (b.tzinfo is None):
+            a, b = a.replace(tzinfo=None), b.replace(tzinfo=None)
+        return a == b
+    da = a.date() if isinstance(a, datetime) else a
+    db = b.date() if isinstance(b, datetime) else b
+    return da == db
+
+
+def _override(ev: Any, rid: Any) -> Any | None:
+    """Bereits vorhandene Ausnahme (VEVENT mit RECURRENCE-ID) für dieses Vorkommen."""
+    for c in _vevents(ev):
+        if "RECURRENCE-ID" in c and _same(c.get("RECURRENCE-ID").dt, rid):
+            return c
+    return None
+
+
+def _rid_value(master: Any, rid: date | datetime) -> date | datetime:
+    """RECURRENCE-ID im Format des Serienbeginns (Datum bzw. Zeit in derselben Zeitzone)."""
+    old = master.get("DTSTART").dt
+    if isinstance(old, datetime):
+        if not isinstance(rid, datetime):
+            rid = datetime.combine(rid, old.timetz())
+        if old.tzinfo is not None and rid.tzinfo is not None:
+            return rid.astimezone(old.tzinfo)
+        return rid.replace(tzinfo=old.tzinfo)
+    return rid.date() if isinstance(rid, datetime) else rid
+
+
+def _apply(comp: Any, changes: dict[str, Any]) -> None:
+    for key in ("summary", "description", "location"):
+        if key in changes:
+            _set(comp, key, changes[key])
+    if "dtstart" in changes and "dtend" in changes:
+        _set(comp, "dtstart", changes["dtstart"])
+        _set(comp, "dtend", changes["dtend"])
+        if "DURATION" in comp:
+            comp.pop("DURATION")
+
+
+def _exdates(comp: Any) -> list[Any]:
+    v = comp.get("EXDATE")
+    if v is None:
+        return []
+    out = []
+    for item in v if isinstance(v, list) else [v]:
+        out.extend(d.dt for d in getattr(item, "dts", []))
+    return out
+
+
+def _shift_series(ev: Any, master: Any, delta: timedelta) -> None:
+    """Uhrzeit der Serie verschoben: EXDATE und RECURRENCE-ID der Ausnahmen mitverschieben,
+    sonst tauchen gelöschte Termine wieder auf bzw. Ausnahmen passen nicht mehr."""
+    if not delta:
+        return
+    ex = _exdates(master)
+    if ex:
+        master.pop("EXDATE")
+        master.add("exdate", [d + delta if isinstance(d, datetime) else d for d in ex])
+    for c in _vevents(ev):
+        if c is not master and "RECURRENCE-ID" in c:
+            old = c.get("RECURRENCE-ID").dt
+            if isinstance(old, datetime):
+                c.pop("RECURRENCE-ID")
+                c.add("recurrence-id", old + delta)
+
+
 def _set(comp: Any, key: str, value: Any) -> None:
     if key.upper() in comp:
         comp.pop(key.upper())
@@ -112,8 +196,12 @@ def delete(entity: Any, uid: str, recurrence_id: str | None = None, near: Any = 
         raise RuntimeError("CalDAV-Verbindung nicht verfügbar")
     ev = _find(cal, uid, near or recurrence_id)
     if recurrence_id:
-        comp = _comp(ev)
-        comp.add("exdate", _parse_rid(recurrence_id))
+        rid = _parse_rid(recurrence_id)
+        master = _master(ev)
+        ov = _override(ev, rid)
+        if ov is not None:
+            ev.icalendar_instance.subcomponents.remove(ov)
+        master.add("exdate", _rid_value(master, rid))
         ev.save()
     else:
         ev.delete()
@@ -126,21 +214,38 @@ def update(entity: Any, uid: str, changes: dict[str, Any], recurrence_id: str | 
     - Einzeltermin: alles wird übernommen.
     - Ganze Serie: Titel/Beschreibung/Ort; Uhrzeit und Dauer werden auf den Serienbeginn übertragen
       (das Datum des Serienbeginns bleibt).
-    - Nur ein Vorkommen einer Serie: dieses Vorkommen wird ausgenommen (EXDATE) und als
-      einzelner Termin neu angelegt.
+    - Nur ein Vorkommen einer Serie: wird als Ausnahme (VEVENT mit RECURRENCE-ID) in derselben
+      Serie gespeichert – wie es die iPhone-Kalender-App macht. So bleibt der Termin Teil der Serie
+      und wird mit „Ganze Serie“ weiter mitgeändert bzw. mitgelöscht.
     """
     cal = calendar_of(entity)
     if cal is None:
         raise RuntimeError("CalDAV-Verbindung nicht verfügbar")
     ev = _find(cal, uid, near or recurrence_id)
-    comp = _comp(ev)
+    comp = _master(ev)
     is_series = "RRULE" in comp
     if is_series and recurrence_id and not whole_series:
-        comp.add("exdate", _parse_rid(recurrence_id))
+        rid = _parse_rid(recurrence_id)
+        ov = _override(ev, rid)
+        if ov is None:
+            ov = type(comp)()
+            ov.add("uid", uid)
+            ov.add("recurrence-id", _rid_value(comp, rid))
+            ov.add("dtstamp", datetime.now(timezone.utc))
+            if "SEQUENCE" in comp:
+                ov.add("sequence", comp.get("SEQUENCE"))
+            for key in ("summary", "description", "location", "dtstart", "dtend"):
+                if key.upper() in comp and key not in changes:
+                    ov.add(key, comp.get(key.upper()))
+            ev.icalendar_instance.add_component(ov)
+        _apply(ov, changes)
         ev.save()
-        new = {k: v for k, v in changes.items() if v not in (None, "")}
-        cal.add_event(**new)
         return
+    if is_series and recurrence_id:
+        # „Ganze Serie“ von einer Ausnahme aus: diese Ausnahme geht in der Serie auf
+        ov = _override(ev, _parse_rid(recurrence_id))
+        if ov is not None:
+            ev.icalendar_instance.subcomponents.remove(ov)
     for key in ("summary", "description", "location"):
         if key in changes:
             _set(comp, key, changes[key])
@@ -153,6 +258,7 @@ def update(entity: Any, uid: str, changes: dict[str, Any], recurrence_id: str | 
                 start2 = base.replace(hour=start.hour, minute=start.minute, second=0, microsecond=0)
                 end = start2 + (end - start)
                 start = start2
+                _shift_series(ev, comp, start2 - base)
             elif isinstance(old, date) and not isinstance(old, datetime) and not isinstance(start, datetime):
                 end = old + (end - start)
                 start = old

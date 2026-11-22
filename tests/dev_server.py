@@ -56,6 +56,7 @@ class CalEvent:
         self.uid, self.summary, self.start, self.end, self.location, self.description = uid, summary, start, end, location, description
         self.rrule, self.recurrence_id = rrule, recurrence_id
         self.exdates: set = set()
+        self.overrides: dict = {}  # rid -> DictComp-Daten (VEVENT mit RECURRENCE-ID)
 
 
 def _expand(ev, win_start, win_end):
@@ -95,6 +96,10 @@ def _expand(ev, win_start, win_end):
         start = datetime.combine(d, s0.timetz()) if isinstance(s0, datetime) else d
         rid = start.strftime("%Y%m%dT%H%M%S") if isinstance(start, datetime) else start.strftime("%Y%m%d")
         if rid in ev.exdates:
+            continue
+        ov = ev.overrides.get(rid)
+        if ov:
+            out.append(CalEvent(ev.uid, ov.get("SUMMARY"), ov["DTSTART"], ov["DTEND"], ov.get("LOCATION"), ov.get("DESCRIPTION"), None, rid))
             continue
         out.append(CalEvent(ev.uid, ev.summary, start, start + dur, ev.location, ev.description, ev.rrule, rid))
     return out
@@ -159,14 +164,57 @@ class _Prop:
         self.dt = dt
 
 
+class _ExList:
+    def __init__(self, dts):
+        self.dts = dts
+
+
 def _rid(v):
     return v.strftime("%Y%m%dT%H%M%S") if isinstance(v, datetime) else v.strftime("%Y%m%d")
+
+
+class DictComp:
+    """Eigenständiges VEVENT (Ausnahme einer Serie)."""
+
+    name = "VEVENT"
+
+    def __init__(self, d=None):
+        self.d = d if d is not None else {}
+
+    def __contains__(self, k):
+        return k.upper() in self.d
+
+    def pop(self, k):
+        self.d.pop(k.upper(), None)
+
+    def add(self, k, v):
+        self.d[k.upper()] = v.dt if isinstance(v, _Prop) else v
+
+    def get(self, k):
+        v = self.d.get(k.upper())
+        return _Prop(v) if k.upper() in ("DTSTART", "DTEND", "RECURRENCE-ID") else v
+
+
+class FakeInst:
+    def __init__(self, ev):
+        self.ev = ev
+        self.subcomponents = [FakeComp(ev)] + [DictComp(dict(d)) for d in ev.overrides.values()]
+
+    def add_component(self, c):
+        self.subcomponents.append(c)
 
 
 class FakeComp:
     """Wie icalendar.Component, nur das Nötigste für caldav_edit."""
 
-    def __init__(self, ev):
+    name = "VEVENT"
+
+    def __new__(cls, ev=None):
+        if ev is None:  # type(master)() -> neue Ausnahme
+            return DictComp()
+        return super().__new__(cls)
+
+    def __init__(self, ev=None):
         self.ev = ev
 
     def __contains__(self, k):
@@ -175,28 +223,43 @@ class FakeComp:
                 "DESCRIPTION": self.ev.description is not None, "LOCATION": self.ev.location is not None}.get(k, False)
 
     def pop(self, k):
+        if k.upper() == "EXDATE":
+            self.ev.exdates = set()
+            return
         setattr(self.ev, {"SUMMARY": "summary", "DESCRIPTION": "description", "LOCATION": "location", "DTSTART": "start", "DTEND": "end"}.get(k.upper(), "_x"), None)
 
     def add(self, k, v):
         k = k.lower()
         if k == "exdate":
-            self.ev.exdates.add(_rid(v))
+            for x in v if isinstance(v, list) else [v]:
+                self.ev.exdates.add(_rid(x))
         else:
             setattr(self.ev, {"summary": "summary", "description": "description", "location": "location", "dtstart": "start", "dtend": "end"}[k], v)
 
     def get(self, k):
         if k.upper() == "UID":
             return self.ev.uid
+        if k.upper() == "EXDATE":
+            if not self.ev.exdates:
+                return None
+            tz = self.ev.start.tzinfo if isinstance(self.ev.start, datetime) else None
+            def back(r):
+                if len(r) == 8:
+                    return date(int(r[:4]), int(r[4:6]), int(r[6:8]))
+                return datetime.strptime(r, "%Y%m%dT%H%M%S").replace(tzinfo=tz)
+            return _ExList([_Prop(back(r)) for r in sorted(self.ev.exdates)])
         return _Prop(self.ev.start if k.upper() == "DTSTART" else self.ev.end)
 
 
 class FakeCaldavEvent:
     def __init__(self, fc, ev):
         self.fc, self.ev = fc, ev
-        self.icalendar_component = FakeComp(ev)
+        self.icalendar_instance = FakeInst(ev)
+        self.icalendar_component = self.icalendar_instance.subcomponents[0]
 
     def save(self):
         self.fc.saved = getattr(self.fc, "saved", 0) + 1
+        self.ev.overrides = {_rid(c.d["RECURRENCE-ID"]): c.d for c in self.icalendar_instance.subcomponents if isinstance(c, DictComp)}
 
     def delete(self):
         self.fc.events = [e for e in self.fc.events if e is not self.ev]
@@ -430,7 +493,7 @@ def run(coro):
 
 
 def debug():
-    cal = {k: [{"uid": e.uid, "summary": e.summary, "start": str(e.start), "description": e.description, "rrule": e.rrule, "exdates": sorted(e.exdates), "rrule_type": (getattr(v, "rrule_types", []) or [None])[i] if i < len(getattr(v, "rrule_types", [])) else None} for i, e in enumerate(v.events)] for k, v in HASS.data["calendar"].entities.items()}
+    cal = {k: [{"uid": e.uid, "summary": e.summary, "start": str(e.start), "description": e.description, "rrule": e.rrule, "exdates": sorted(e.exdates), "overrides": {k: v.get("SUMMARY") for k, v in e.overrides.items()}, "rrule_type": (getattr(v, "rrule_types", []) or [None])[i] if i < len(getattr(v, "rrule_types", [])) else None} for i, e in enumerate(v.events)] for k, v in HASS.data["calendar"].entities.items()}
     todo = {k: [{"uid": i.uid, "summary": i.summary, "status": i.status.value, "description": getattr(i, "description", None)} for i in v.todo_items] for k, v in HASS.data["todo"].entities.items()}
     plans = [{"id": p["mealplan_id"], "type": p["entry_type"].value, "date": str(p["mealplan_date"]), "title": p["title"], "recipe": (p["recipe"] or {}).get("name")} for p in HASS.mealie.plans]
     return {"mealie": plans, "data": HUB.data, "calendars": cal, "todo": todo, "events": HASS.bus.fired, "service_calls": HASS.services.calls, "stored": fake_storage._MEM}

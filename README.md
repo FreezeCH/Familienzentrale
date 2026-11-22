@@ -54,5 +54,6 @@ In Entwicklung (Version 0.5.3).
 - `python tests/test_logic.py`: Fachlogik (Fälligkeit, Routinen, Punkte, Müll, Datenübernahme)
 - `python tests/test_ingredients.py`: Zerlegung von Zutaten in Name und Menge
 - `python tests/test_rrule.py`: Wiederholungsregeln je Kalendertyp (lokal, CalDAV)
+- `python tests/test_caldav_edit.py`: Bearbeiten/Löschen in CalDAV-Serien mit echter icalendar-Bibliothek (`pip install icalendar`, sonst übersprungen)
 - `python tests/dev_server.py`: echtes Backend mit einer kleinen Home-Assistant-Attrappe, Panel unter `http://127.0.0.1:8770/tests/e2e.html`
   - Kompletter Klicktest in der Browser-Konsole: `await (await import('/tests/e2e_run.js')).run()`

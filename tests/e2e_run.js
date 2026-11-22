@@ -245,6 +245,21 @@ export async function run() {
   qa(".dlg [data-b]").find((b) => b.textContent.includes("Nur diesen")).click(); await w(400); await pinIf(); await w(300);
   st2 = await el.backend.load();
   check("CalDAV: einzelnes Vorkommen gelöscht", st2.events.filter((e) => e.title === "Yoga mit Anna").length === 2);
+  // nur ein Vorkommen ändern -> Ausnahme in derselben Serie
+  let yo2 = st2.events.filter((e) => e.title === "Yoga mit Anna");
+  await el.backend.act("update_event", { id: yo2[0].id, recurrence_id: yo2[0].recurrence_id, scope: "one", title: "Yoga Ausnahme", person: mutter.id, allday: false, start: yo2[0].start.slice(0, 10) + "T17:00:00", end: yo2[0].start.slice(0, 10) + "T18:00:00", _pin: el._pinToken });
+  d = await dbg();
+  const y3 = d.calendars["calendar.icloud"].find((e) => e.uid === yoga.uid);
+  check("CalDAV: Einzeländerung bleibt in der Serie (Ausnahme)", y3 && Object.values(y3.overrides).includes("Yoga Ausnahme") && d.calendars["calendar.icloud"].filter((e) => e.summary === "Yoga Ausnahme").length === 0, y3);
+  st2 = await el.backend.load(); el.state = st2; el.sub.cal = "woche"; el.sub.calDate = yo2[0].start.slice(0, 10); el.render(); await w();
+  yev = qa(".evc[data-act=event]").find((e) => e.textContent.includes("Yoga Ausnahme"));
+  yev.click(); await w();
+  qa(".dlg [data-b]").find((b) => b.textContent.includes("Bearbeiten")).click(); await w(); await pinIf();
+  check("CalDAV: geänderter Termin bietet „Ganze Serie“", !!q(".dlg [data-k=scope]") && q(".dlg [data-k=scope]").innerHTML.includes("Ganze Serie"));
+  set("title", "Yoga Serie"); set("scope", "all"); await save(); await w(300);
+  st2 = await el.backend.load();
+  check("CalDAV: Ganze Serie ab Ausnahme – alle umbenannt", st2.events.filter((e) => e.title === "Yoga Serie").length === 2 && !st2.events.some((e) => e.title === "Yoga Ausnahme" || e.title === "Yoga mit Anna"), st2.events.filter((e) => e.title.startsWith("Yoga")).map((e) => e.title));
+  el.state = st2; el.render();
   el.state = st2; el.render();
   await click("[data-act=calnav][data-v='0']");
 
