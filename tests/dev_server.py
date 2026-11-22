@@ -120,6 +120,11 @@ class FakeMealie:
                        "ingredients": [ing(500, "g", "Spaghetti"), ing(400, "g", "Hackfleisch"), ing(1, None, "Zwiebel"), ing(None, None, None, "Salz und Pfeffer")]},
             "r-curry": {"recipe_id": "r-curry", "slug": "gemuesecurry", "name": "Gemüsecurry", "image": None,
                         "ingredients": [ing(1, "Dose", "Kokosmilch"), ing(2, None, "Zwiebel"), ing(250, "g", "Reis")]},
+            "r-voressen": {"recipe_id": "r-voressen", "slug": "rindsvoressen", "name": "Rindsvoressen", "image": None,
+                           "ingredients": [{"quantity": 1, "unit": None, "food": None, "note": "1 Bund Schnittlauch, fein geschnitten", "display": "1 1 Bund Schnittlauch, fein geschnitten", "original_text": None},
+                                           {"quantity": 200, "unit": {"name": "g"}, "food": None, "note": "", "display": "200 g", "original_text": None},
+                                           {"quantity": 0, "unit": None, "food": None, "note": "Salz, Pfeffer", "display": "Salz, Pfeffer", "original_text": None},
+                                           {"quantity": 0, "unit": None, "food": None, "note": "Schnittlauch zum Garnieren", "display": "Schnittlauch zum Garnieren", "original_text": None}]},
             "r-muesli": {"recipe_id": "r-muesli", "slug": "birchermuesli", "name": "Birchermüesli", "image": None,
                          "ingredients": [ing(100, "g", "Haferflocken"), ing(2, None, "Äpfel")]},
         }

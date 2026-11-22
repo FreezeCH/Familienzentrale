@@ -15,6 +15,8 @@ from typing import Any
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 
+from .ingredients import ingredient_line, norm
+
 _LOGGER = logging.getLogger(__name__)
 
 # Felder im Essensplan der Familienzentrale  <->  Gerichtstyp in Mealie
@@ -37,27 +39,6 @@ def _val(x: Any) -> str:
 
 def _iso(x: Any) -> str:
     return x.isoformat()[:10] if hasattr(x, "isoformat") else str(x or "")[:10]
-
-
-def ingredient_line(ing: dict) -> dict[str, str]:
-    """Zutat aus Mealie -> {"name": ..., "spec": ...} für die Einkaufsliste."""
-    food = ing.get("food") or {}
-    unit = ing.get("unit") or {}
-    name = (food.get("name") if isinstance(food, dict) else "") or ""
-    qty = ing.get("quantity")
-    spec_parts = []
-    if qty not in (None, 0, 0.0, "", "0"):
-        q = float(qty)
-        spec_parts.append(str(int(q)) if q.is_integer() else str(round(q, 2)).rstrip("0").rstrip("."))
-    if isinstance(unit, dict):
-        u = unit.get("abbreviation") if unit.get("use_abbreviation") and unit.get("abbreviation") else unit.get("name")
-        if u:
-            spec_parts.append(u)
-    if name:
-        return {"name": name.strip(), "spec": " ".join(spec_parts)}
-    # Zutat ohne erkanntes Lebensmittel (z. B. „1 Prise Salz“): Text so übernehmen, wie er im Rezept steht
-    text = ing.get("note") or ing.get("display") or ing.get("original_text") or ""
-    return {"name": str(text).strip(), "spec": ""}
 
 
 class MealieBridge:
@@ -207,7 +188,7 @@ class MealieBridge:
                 line = ingredient_line(ing)
                 if not line["name"]:
                     continue
-                key = line["name"].lower()
+                key = norm(line["name"])
                 if key in merged:
                     if line["spec"] and line["spec"] not in merged[key]["specs"]:
                         merged[key]["specs"].append(line["spec"])

@@ -216,7 +216,7 @@ export async function run() {
     b.click(); await w(700);
   };
   q(cellSel(todayIso, "abend")).click(); await w(600);
-  check("Rezeptsuche zeigt Mealie-Rezepte", qa("#rl [data-rid]").length === 3, qa("#rl [data-rid]").length);
+  check("Rezeptsuche zeigt Mealie-Rezepte", qa("#rl [data-rid]").length === 4, qa("#rl [data-rid]").length);
   q("#rq").value = "bolo"; q("#rq").dispatchEvent(new Event("input", { bubbles: true })); await w(700);
   check("Suche filtert", qa("#rl [data-rid]").length === 1);
   qa("#rl [data-rid]")[0].click(); await w(700);
@@ -242,6 +242,21 @@ export async function run() {
   d = await dbg();
   const zu = d.todo["todo.zuhause"];
   check("Zutaten in Bring mit Menge als Beschreibung", zu.some((i) => i.summary === "Spaghetti" && i.description === "500 g") && zu.some((i) => i.summary === "Salz und Pfeffer"), zu);
+  // Freitext-Zutaten, Grundzutaten, kein Doppel bei mehrfachem Senden
+  const fx = await el.backend.act("recipe_ingredients", { recipe_ids: ["r-voressen"] });
+  const fxn = (fx.items || []).map((i) => i.name + "|" + i.spec);
+  check("Freitext-Zutaten zerlegt, reine Mengen weggelassen", fxn.includes("Schnittlauch|1 Bund, fein geschnitten + zum Garnieren") && !fxn.some((x) => x.startsWith("200 g")) && fxn.includes("Salz, Pfeffer|"), fxn);
+  const before = (await dbg()).todo["todo.zuhause"].length;
+  await Promise.all([el.backend.act("send_to_bring", { items: fx.items }), el.backend.act("send_to_bring", { items: fx.items })]);
+  await el.backend.act("send_to_bring", { items: fx.items });
+  d = await dbg();
+  const sch = d.todo["todo.zuhause"].filter((i) => i.summary === "Schnittlauch").length;
+  check("Mehrfach senden: keine Doppel-Einträge", sch === 1 && d.todo["todo.zuhause"].length === before + 2, [sch, before, d.todo["todo.zuhause"].length]);
+  await nav("essen"); await click("[data-act=weekbring]", 900);
+  const salz = qa(".dlg .task").find((x) => x.textContent.includes("Salz und Pfeffer"));
+  check("Grundzutat (Salz) nicht vorausgewählt", salz && !salz.querySelector("input").checked);
+  q(".dlg [data-b]").click(); await w();
+
   // Automatisch
   await nav("einstellungen"); if (q("[data-act=unlock]")) { await click("[data-act=unlock]"); await pin(); }
   await chg("select[data-chg=mealie][data-k=to_bring]", "auto");

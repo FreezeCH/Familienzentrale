@@ -8,7 +8,7 @@
  */
 (function () {
   "use strict";
-  var PANEL_VERSION = "0.4.1"; // muss zu const.py VERSION passen
+  var PANEL_VERSION = "0.4.2"; // muss zu const.py VERSION passen
 
   // ---------- Hilfsfunktionen ----------
   var pad = function (n) { return String(n).padStart(2, "0"); };
@@ -925,7 +925,7 @@ label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--mu
         "<label class='f'>Farbschema<select data-chg='set' data-k='theme'><option value='hell'" + (s.theme === "hell" ? " selected" : "") + ">Hell</option><option value='dunkel'" + (s.theme === "dunkel" ? " selected" : "") + ">Dunkel</option></select></label>" +
         "<label class='row'><input type='checkbox' data-chg='setbool' data-k='lock_calendar' " + (s.lock_calendar ? "checked" : "") + "> Termine anlegen/löschen nur mit PIN</label>" +
         "<button class='btn sec' data-act='newpin'>🔑 PIN ändern</button></div></div>" +
-        "<div class='card set-sec'><h3>🍽️ Mealie & Bring</h3><div class='form'><label class='f'>Zutaten an Bring<select data-chg='mealie' data-k='to_bring'>" + [["auto", "automatisch beim Eintragen"], ["button", "auf Knopfdruck (mit Auswahl)"], ["never", "nie"]].map((o) => "<option value='" + o[0] + "'" + (s.mealie.to_bring === o[0] ? " selected" : "") + ">" + o[1] + "</option>").join("") + "</select></label><label class='f'>Einkaufsliste für Zutaten und Einkauf<select data-chg='mealie' data-k='bring_list'><option value=''>– bitte wählen –</option>" + this._todoLists().map((o) => "<option value='" + esc(o.entity_id) + "'" + (s.mealie.bring_list === o.entity_id ? " selected" : "") + ">" + esc(o.name) + (o.platform === "bring" ? " · Bring" : "") + "</option>").join("") + "</select></label><div class='f'><span class='small muted'><b>Zeilen im Essensplan</b></span><div class='grid' style='grid-template-columns:repeat(auto-fill,minmax(130px,1fr))'>" + ALL_SLOTS.map((x) => "<label class='row'><input type='checkbox' data-chg='slot' data-v='" + x[0] + "'" + (slotsOf(st).some((y) => y[0] === x[0]) ? " checked" : "") + ">" + x[1] + "</label>").join("") + "</div></div></div></div>" +
+        "<div class='card set-sec'><h3>🍽️ Mealie & Bring</h3><div class='form'><label class='f'>Zutaten an Bring<select data-chg='mealie' data-k='to_bring'>" + [["auto", "automatisch beim Eintragen"], ["button", "auf Knopfdruck (mit Auswahl)"], ["never", "nie"]].map((o) => "<option value='" + o[0] + "'" + (s.mealie.to_bring === o[0] ? " selected" : "") + ">" + o[1] + "</option>").join("") + "</select></label><label class='f'>Einkaufsliste für Zutaten und Einkauf<select data-chg='mealie' data-k='bring_list'><option value=''>– bitte wählen –</option>" + this._todoLists().map((o) => "<option value='" + esc(o.entity_id) + "'" + (s.mealie.bring_list === o.entity_id ? " selected" : "") + ">" + esc(o.name) + (o.platform === "bring" ? " · Bring" : "") + "</option>").join("") + "</select></label><label class='f'>Grundzutaten, die nie vorausgewählt sind (kommagetrennt)<input data-chg='skiplist' value='" + esc(((s.mealie || {}).skip || []).join(", ")) + "'></label><div class='f'><span class='small muted'><b>Zeilen im Essensplan</b></span><div class='grid' style='grid-template-columns:repeat(auto-fill,minmax(130px,1fr))'>" + ALL_SLOTS.map((x) => "<label class='row'><input type='checkbox' data-chg='slot' data-v='" + x[0] + "'" + (slotsOf(st).some((y) => y[0] === x[0]) ? " checked" : "") + ">" + x[1] + "</label>").join("") + "</div></div></div></div>" +
         "<div class='card set-sec'><h3>🔔 Benachrichtigungen</h3><div class='form'><label class='f'>Telegram (Notify-Aktion)<input data-chg='notify' data-k='telegram' placeholder='notify.telegram_familie' value='" + esc(s.notify.telegram) + "'></label><label class='f'>Sonos-Lautsprecher (kommagetrennt)<input data-chg='notifylist' data-k='sonos' placeholder='media_player.sonos_kuche' value='" + esc((s.notify.sonos || []).join(", ")) + "'></label>" +
         "<div class='row'><label class='f' style='flex:1'>Ruhezeit von<input type='time' data-chg='notify' data-k='quiet_from' value='" + esc(s.notify.quiet_from) + "'></label><label class='f' style='flex:1'>bis<input type='time' data-chg='notify' data-k='quiet_to' value='" + esc(s.notify.quiet_to) + "'></label></div>" +
         "<label class='f'>Müll-Erinnerung am Vorabend um<input type='time' data-chg='notify' data-k='waste_time' value='" + esc(s.notify.waste_time) + "'></label></div></div>" +
@@ -1004,6 +1004,7 @@ label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--mu
         case "setbool": save(k, el.checked); break;
         case "mealie": save("mealie", Object.assign({}, s.mealie, { [k]: el.value })); break;
         case "notify": save("notify", Object.assign({}, s.notify, { [k]: el.value })); break;
+        case "skiplist": save("mealie", Object.assign({}, s.mealie, { skip: el.value.split(",").map((x) => x.trim()).filter(Boolean) })); break;
         case "slot": { var on = slotsOf(this.state).map((x) => x[0]).filter((x) => x !== el.getAttribute("data-v")); if (el.checked) on.push(el.getAttribute("data-v")); on = ALL_SLOTS.map((x) => x[0]).filter((x) => on.indexOf(x) >= 0); if (!on.length) { el.checked = true; break; } save("mealie", Object.assign({}, s.mealie, { slots: on })); break; }
         case "notifylist": save("notify", Object.assign({}, s.notify, { [k]: el.value.split(",").map((x) => x.trim()).filter(Boolean) })); break;
         case "frame": save("frame", Object.assign({}, s.frame, { [k]: el.value })); break;
@@ -1277,8 +1278,12 @@ label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--mu
       this.backend.act("recipe_ingredients", { recipe_ids: ids, names: names }).then((r) => {
         var items = (r && r.items) || [];
         if (!items.length) return this.toast("Keine Zutaten gefunden – sind die Gerichte als Rezepte in Mealie geplant?");
-        var have = st.shopping.map((x) => x.summary.toLowerCase());
-        var dlg = this.dialog("🛒 Zutaten an Bring", "<p class='small muted'>Abwählen, was schon da ist. Was bereits auf der Liste steht, ist abgewählt.</p><div class='list'>" + items.map((it, n) => "<label class='task'><input type='checkbox' data-n='" + n + "'" + (have.indexOf(it.name.toLowerCase()) < 0 ? " checked" : "") + "><span class='nm'>" + esc(it.name) + (it.spec ? " <span class='muted'>" + esc(it.spec) + "</span>" : "") + (it.recipes && it.recipes.length ? "<br><span class='small muted'>" + esc(it.recipes.join(", ")) + "</span>" : "") + "</span></label>").join("") + "</div>",
+        var norm = (x) => String(x || "").toLowerCase().split(/\s+/).filter(Boolean).join(" ");
+        var have = st.shopping.map((x) => norm(x.summary));
+        var skip = ((st.settings.mealie || {}).skip || []).map(norm);
+        var isSkip = (n) => { var parts = norm(n).split(/\s*(?:,|und|&|\/)\s*/).filter(Boolean); return parts.length > 0 && parts.every((x) => skip.indexOf(x) >= 0); };
+        var pre = (it) => have.indexOf(norm(it.name)) < 0 && !isSkip(it.name);
+        var dlg = this.dialog("🛒 Zutaten an Bring", "<p class='small muted'>Abwählen, was schon da ist. Was bereits auf der Liste steht und Grundzutaten wie Salz sind abgewählt.</p><div class='list'>" + items.map((it, n) => "<label class='task'><input type='checkbox' data-n='" + n + "'" + (pre(it) ? " checked" : "") + "><span class='nm'>" + esc(it.name) + (it.spec ? " <span class='muted'>" + esc(it.spec) + "</span>" : "") + (it.recipes && it.recipes.length ? "<br><span class='small muted'>" + esc(it.recipes.join(", ")) + "</span>" : "") + "</span></label>").join("") + "</div>",
           [["Abbrechen", "sec"], ["An Bring senden", "", () => {
             var sel = Array.prototype.map.call(dlg.querySelectorAll("input:checked"), (x) => items[Number(x.getAttribute("data-n"))]);
             return this.act("send_to_bring", { items: sel }).then((res) => this.toast("🛒 " + (res && res.added != null ? res.added : sel.length) + " Artikel an Bring"));
@@ -1294,9 +1299,14 @@ label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--mu
       layer.querySelector(".ov").addEventListener("click", (e) => { if (e.target.classList.contains("ov")) this.closeDialog(); });
       dlg.querySelectorAll("[data-b]").forEach((b) => b.addEventListener("click", (e) => {
         e.stopPropagation();
+        if (dlg.__busy) return;
         var fn = buttons[Number(b.getAttribute("data-b"))][2];
         var r = fn ? fn() : null;
-        if (r && r.then) r.then(() => this.closeDialog()).catch(() => { /* Meldung kam schon */ });
+        if (r && r.then) {
+          dlg.__busy = true;
+          dlg.querySelectorAll("[data-b]").forEach((x) => { x.disabled = true; x.style.opacity = ".5"; });
+          r.then(() => this.closeDialog()).catch(() => { dlg.__busy = false; dlg.querySelectorAll("[data-b]").forEach((x) => { x.disabled = false; x.style.opacity = ""; }); });
+        }
         else if (r !== false) this.closeDialog();
       }));
       return dlg;

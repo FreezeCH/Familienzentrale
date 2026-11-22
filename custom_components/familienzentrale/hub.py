@@ -19,6 +19,7 @@ from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
 from . import logic
+from .ingredients import norm
 from .mealie import MealieBridge
 from .const import (
     CAL_DAYS_AHEAD,
@@ -69,7 +70,7 @@ DEFAULT_DATA: dict[str, Any] = {
             "waste_time": "19:00",
             "waste_targets": ["telegram", "sonos"],
         },
-        "mealie": {"to_bring": "button", "bring_list": "", "slots": ["fruehstueck", "mittag", "abend"]},
+        "mealie": {"to_bring": "button", "bring_list": "", "slots": ["fruehstueck", "mittag", "abend"], "skip": ["Salz", "Pfeffer", "Salz, Pfeffer", "Wasser"]},
         "pin": None,  # {"salt": ..., "hash": ...}
     },
     "persons": [],
@@ -117,6 +118,9 @@ class FamilienzentraleHub:
         self._listeners: list[Callable[[], None]] = []
         self._tokens: dict[str, float] = {}
         self.mealie = MealieBridge(hass)
+        # Kürzlich an die Einkaufsliste geschickte Artikel. Bring meldet neue Einträge
+        # erst mit Verzögerung zurück; so entstehen bei mehrfachem Senden keine Doppel.
+        self._recent_added: dict[str, float] = {}
 
     # ---------- Laden / Speichern ----------
     async def async_load(self) -> None:
@@ -388,7 +392,9 @@ class FamilienzentraleHub:
         target = self._shopping_list()
         if not target:
             raise HomeAssistantError("Keine Einkaufsliste gewählt (Einstellungen → Mealie & Bring)")
-        have = {i["summary"].strip().lower() for i in self._shopping_items()}
+        now = time.monotonic()
+        self._recent_added = {k: v for k, v in self._recent_added.items() if now - v < 900}
+        have = {norm(i["summary"]) for i in self._shopping_items()} | set(self._recent_added)
         added = 0
         for it in items:
             spec = ""
@@ -396,13 +402,14 @@ class FamilienzentraleHub:
                 name, spec = str(it.get("name") or "").strip(), str(it.get("spec") or "").strip()
             else:
                 name = str(it).strip()
-            if not name or name.lower() in have:
+            if not name or norm(name) in have:
                 continue
             payload = {"item": name}
             if spec:
                 payload["description"] = spec
             await self.hass.services.async_call("todo", "add_item", payload, target={"entity_id": target}, blocking=True)
-            have.add(name.lower())
+            have.add(norm(name))
+            self._recent_added[norm(name)] = time.monotonic()
             added += 1
         return added
 
@@ -580,6 +587,9 @@ class FamilienzentraleHub:
             result["added"] = await self._async_shopping_add([str(data.get("summary", ""))])
 
         elif action == "shopping_done":
+            done_name = next((i["summary"] for i in self._shopping_items() if i["uid"] == data.get("uid")), None)
+            if done_name:
+                self._recent_added.pop(norm(done_name), None)
             target = self._shopping_list()
             if target:
                 await self.hass.services.async_call("todo", "update_item", {"item": data.get("uid"), "status": "completed"}, target={"entity_id": target}, blocking=True)

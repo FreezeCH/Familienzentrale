@@ -14,7 +14,7 @@ Ein Familienplaner als eigenes Panel in Home Assistant, für das Wand-Tablet und
 Alles wird in der Oberfläche eingestellt. Es gibt kein YAML.
 
 ## Status
-In Entwicklung (Version 0.4.1).
+In Entwicklung (Version 0.4.2).
 
 | Teil | Stand |
 |---|---|
@@ -48,5 +48,6 @@ In Entwicklung (Version 0.4.1).
 
 ## Tests
 - `python tests/test_logic.py`: Fachlogik (Fälligkeit, Routinen, Punkte, Müll, Datenübernahme)
+- `python tests/test_ingredients.py`: Zerlegung von Zutaten in Name und Menge
 - `python tests/dev_server.py`: echtes Backend mit einer kleinen Home-Assistant-Attrappe, Panel unter `http://127.0.0.1:8770/tests/e2e.html`
   - Kompletter Klicktest in der Browser-Konsole: `await (await import('/tests/e2e_run.js')).run()`
