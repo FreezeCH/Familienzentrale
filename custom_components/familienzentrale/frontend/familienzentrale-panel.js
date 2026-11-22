@@ -8,7 +8,7 @@
  */
 (function () {
   "use strict";
-  var PANEL_VERSION = "0.7.0"; // muss zu const.py VERSION passen
+  var PANEL_VERSION = "0.7.1"; // muss zu const.py VERSION passen
 
   // ---------- Hilfsfunktionen ----------
   var pad = function (n) { return String(n).padStart(2, "0"); };
@@ -1751,16 +1751,29 @@ label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--mu
     }
     _openShow() {
       if (this._show || !this.isConnected) return;
+      if (document.querySelector("familienzentrale-rahmen-card[data-fz-ruhe]")) return; // es läuft schon eine
       if (this.state && this._isNight()) { this._idleKick(); return; }
       var el = document.createElement("familienzentrale-rahmen-card");
+      el.setAttribute("data-fz-ruhe", "");
       el.setConfig({ vollbild: true, abdunkeln: this._cfg.ruhebild_abdunkeln || 0, anpassen: this._cfg.anpassen || "contain" });
       el.style.cssText = "position:fixed;left:0;top:0;right:0;bottom:0;z-index:9999";
       el._onTap = () => { this._closeShow(); this._idleKick(); };
+      el.title = "Antippen zum Schliessen";
       el.hass = this._hass;
       document.body.appendChild(el);
       this._show = el;
     }
-    _closeShow() { if (this._show) { this._show.remove(); this._show = null; } }
+    _closeShow() {
+      // alle laufenden Diashows schliessen; kurz durchsichtig stehen lassen, damit das Antippen
+      // nicht zusätzlich etwas auf dem Dashboard darunter auslöst
+      this._show = null;
+      document.querySelectorAll("familienzentrale-rahmen-card[data-fz-ruhe]").forEach(function (el) {
+        el.removeAttribute("data-fz-ruhe");
+        el.style.opacity = "0";
+        el.style.transition = "opacity .2s";
+        setTimeout(function () { el.remove(); }, 500);
+      });
+    }
     render() {
       if (!this.state) return;
       var st = this.state, t = todayIso(), m = st.settings.modules || {};
@@ -1801,7 +1814,12 @@ label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--mu
     _resetIdle() { /* hier nicht */ }
     connectedCallback() {
       super.connectedCallback();
-      if (!this._tapBound) { this._tapBound = true; this.shadowRoot.addEventListener("click", () => this._tap()); }
+      if (!this._tapBound) {
+        this._tapBound = true;
+        // Antippen: schon beim Berühren reagieren (auf dem iPad kommt „click“ bei solchen Flächen nicht immer an)
+        var on = () => { var t = Date.now(); if (t - (this._lastTap || 0) < 700) return; this._lastTap = t; this._tap(); };
+        ["pointerdown", "touchstart", "mousedown", "click"].forEach((n) => this.shadowRoot.addEventListener(n, on, { passive: true }));
+      }
       clearInterval(this._ct);
       this._ct = setInterval(() => this._tick(), 15000);
       if (this.state) this._go();
