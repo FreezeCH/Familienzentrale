@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Familienzentrale – Wand-Test</title>
+<!-- Nachbau des Wand-Dashboards (1024 × 768): Startseite mit „Heute“-Karte und Seite „Familie“ mit der ganzen Karte.
+     Läuft gegen tests/dev_server.py. Wechsel der Seiten wie in HA über history.pushState + „location-changed“. -->
+<style>
+  html, body { margin: 0; height: 100%; font-family: -apple-system, "Segoe UI", Roboto, sans-serif; color: #eee; }
+  body { background: radial-gradient(900px 500px at 15% 0%, #25307a 0%, transparent 60%), radial-gradient(700px 500px at 100% 100%, #4a2a8a 0%, transparent 60%), linear-gradient(160deg, #0b1230, #1a1446); }
+  #start { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 8px; }
+  .fake { background: rgba(255,255,255,0.07); border: 1px solid rgba(255,255,255,0.10); border-radius: 18px; padding: 14px; }
+  .slot { height: 512px; background: rgba(255,255,255,0.07); border: 1px solid rgba(255,255,255,0.10); border-radius: 18px; overflow: hidden; }
+  #familie { height: 100vh; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<div id="start">
+  <div class="fake" style="height:480px">Energie (Platzhalter)</div>
+  <div class="slot" id="heuteslot"></div>
+</div>
+<div id="familie" hidden></div>
+<script>document.write('<script src="../custom_components/familienzentrale/frontend/familienzentrale-panel.js?' + Date.now() + '"><\/script>');</script>
+<script>
+  var fakeHass = {
+    states: {},
+    callWS: function (msg) {
+      return fetch("/api/ws", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(msg) })
+        .then(function (r) { return r.json(); })
+        .then(function (r) { if (!r.ok) throw { code: r.code, message: r.message }; return r.result; });
+    },
+    connection: { subscribeMessage: function () { return Promise.reject(new Error("kein Abo im Test")); } }
+  };
+  var heute = document.createElement("familienzentrale-heute-card");
+  heute.setConfig({ stil: "wand", ziel: "/tests/wand.html/familie" });
+  heute.hass = fakeHass;
+  document.getElementById("heuteslot").appendChild(heute);
+  var karte = document.createElement("familienzentrale-card");
+  karte.setConfig({ stil: "wand", zurueck: "/tests/wand.html/start" });
+  karte.hass = fakeHass;
+  // Seitenwechsel wie Lovelace: nicht sichtbare Seite wird aus dem DOM genommen
+  function route() {
+    var fam = location.pathname.indexOf("/familie") >= 0;
+    document.getElementById("start").hidden = fam;
+    document.getElementById("familie").hidden = !fam;
+    var box = document.getElementById(fam ? "familie" : "heuteslot");
+    var el = fam ? karte : heute, other = fam ? heute : karte;
+    if (other.isConnected) other.remove();
+    if (!el.isConnected) box.appendChild(el);
+  }
+  window.addEventListener("location-changed", route);
+  route();
+</script>
+</body>
+</html>

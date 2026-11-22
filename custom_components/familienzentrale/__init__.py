@@ -37,6 +37,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await hass.http.async_register_static_paths(
             [StaticPathConfig(STATIC_URL, str(Path(__file__).parent / "frontend"), cache_headers=False)]
         )
+        # Dashboard-Karten (familienzentrale-card, familienzentrale-heute-card) ohne eigene Ressource laden.
+        # Gleiche Adresse wie das Panel, damit der Browser die Datei nur einmal lädt.
+        frontend.add_extra_js_url(hass, f"{STATIC_URL}/familienzentrale-panel.js?v={VERSION}")
         hass.data[_FLAG_STATIC] = True
 
     await panel_custom.async_register_panel(

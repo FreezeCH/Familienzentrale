@@ -50,10 +50,28 @@ In Entwicklung (Version 0.5.3).
 - **Mealie:** die offizielle Integration [Mealie](https://www.home-assistant.io/integrations/mealie/)
 - **Bring:** die offizielle Integration [Bring!](https://www.home-assistant.io/integrations/bring/)
 
+## Dashboard-Karten
+
+Die Integration lädt zwei Karten selbst. Eine Dashboard-Ressource ist nicht nötig.
+
+```yaml
+# Ganze Familienzentrale, z. B. in einer Dashboard-Seite vom Typ „Panel“
+type: custom:familienzentrale-card
+stil: wand                 # optional: durchsichtig, Glas-Kacheln, immer dunkel
+zurueck: /mein-dashboard/start   # optional: Knopf „← Start“
+ansicht: einkauf           # optional: Bereich beim Öffnen; auch über #einkauf in der Adresse
+
+# Übersicht „Heute“ pro Person (Termine, Routinen, Aufgaben, Punkte)
+type: custom:familienzentrale-heute-card
+stil: wand
+ziel: /mein-dashboard/familie    # Seite mit der ganzen Familienzentrale
+```
+
 ## Tests
 - `python tests/test_logic.py`: Fachlogik (Fälligkeit, Routinen, Punkte, Müll, Datenübernahme)
 - `python tests/test_ingredients.py`: Zerlegung von Zutaten in Name und Menge
 - `python tests/test_rrule.py`: Wiederholungsregeln je Kalendertyp (lokal, CalDAV)
+- `tests/wand.html`: Nachbau eines Wand-Dashboards (1024 × 768) mit beiden Karten
 - `python tests/test_caldav_edit.py`: Bearbeiten/Löschen in CalDAV-Serien mit echter icalendar-Bibliothek (`pip install icalendar`, sonst übersprungen)
 - `python tests/dev_server.py`: echtes Backend mit einer kleinen Home-Assistant-Attrappe, Panel unter `http://127.0.0.1:8770/tests/e2e.html`
   - Kompletter Klicktest in der Browser-Konsole: `await (await import('/tests/e2e_run.js')).run()`

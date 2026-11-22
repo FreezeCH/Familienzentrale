@@ -8,7 +8,7 @@
  */
 (function () {
   "use strict";
-  var PANEL_VERSION = "0.5.4"; // muss zu const.py VERSION passen
+  var PANEL_VERSION = "0.6.0"; // muss zu const.py VERSION passen
 
   // ---------- Hilfsfunktionen ----------
   var pad = function (n) { return String(n).padStart(2, "0"); };
@@ -566,7 +566,31 @@
 display:block;height:100%;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:var(--ink);background:var(--bg);-webkit-tap-highlight-color:transparent}\
 :host([data-theme=dunkel]){--bg:#15131f;--card:#211e30;--ink:#f1eff8;--muted:#a19cb8;--line:#332f47;--rail:#1b1829;--shadow:none}\
 *{box-sizing:border-box}button{font:inherit;color:inherit;cursor:pointer}\
-.app{display:flex;height:100vh}\
+.app{display:flex;height:var(--fz-hoehe,100vh)}\
+:host([data-stil=wand]){--bg:rgba(255,255,255,.05);--card:rgba(255,255,255,.07);--ink:#f1eff8;--muted:#a9a4c4;--line:rgba(255,255,255,.10);--rail:rgba(255,255,255,.04);--shadow:none;background:transparent}\
+:host([data-stil=wand]) .dlg,:host([data-stil=wand]) .lob div{background:#211e30}\
+:host([data-stil=wand]) input,:host([data-stil=wand]) select,:host([data-stil=wand]) textarea{background:#2a2640}\
+:host([data-stil=wand]) .toast{background:#f1eff8;color:#211e30}\
+:host([data-stil=wand]) .tabs button.on{color:#211e30}\
+:host([data-stil=wand]) .chk{background:rgba(255,255,255,.08)}\
+:host([data-stil=wand]) .rail button.back{color:var(--ink);background:rgba(255,255,255,.08)}\
+.heute{height:100%;display:flex;flex-direction:column;gap:8px;padding:12px;overflow:hidden}\
+.heute .hh{display:flex;align-items:center;gap:8px;font-size:17px}\
+.heute .hh b{cursor:pointer}\
+.heute .hb{flex:1;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;display:flex;flex-direction:column;gap:8px}\
+.people.mini{grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:8px;margin:0}\
+.mini .pcol{border-radius:14px}\
+.mini .pcol .ph{padding:6px 10px;gap:8px}\
+.mini .pcol .pb{padding:4px 8px 8px;gap:5px}\
+.mini .av{width:28px;height:28px;font-size:13px;border-width:2px}\
+.mini .pname{font-size:15px}\
+.mini .pts{font-size:12px;padding:2px 8px}\
+.mini .ev,.mini .task{font-size:13px;padding:4px 6px;gap:6px}\
+.mini .ev .t{min-width:36px}\
+.mini .task .ic{font-size:16px;width:20px}\
+.mini .chk{width:26px;height:26px;font-size:14px}\
+.mini .empty{padding:4px;font-size:12px}\
+.heute .line{font-size:13px;padding:6px 10px;border-radius:12px;background:var(--card);border:1px solid var(--line)}\
 .rail{width:88px;flex:none;background:var(--rail);border-right:1px solid var(--line);display:flex;flex-direction:column;align-items:center;padding:10px 0;gap:4px;overflow-y:auto}\
 .rail button{width:76px;border:0;background:none;border-radius:14px;padding:8px 2px;display:flex;flex-direction:column;align-items:center;gap:2px;font-size:11px;color:var(--muted)}\
 .rail button .i{font-size:24px;line-height:1}\
@@ -692,6 +716,13 @@ label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--mu
     ["essen", "🍽️", "Essen"], ["einkauf", "🛒", "Einkauf"], ["wartung", "🔧", "Wartung"], ["muell", "🗑️", "Müll"]
   ];
 
+  // Navigation innerhalb von Home Assistant (wie ein Tippen auf einen Link im Dashboard)
+  var navigateTo = function (path) {
+    history.pushState(null, "", path);
+    window.dispatchEvent(new CustomEvent("location-changed", { detail: { replace: false } }));
+  };
+  var NAV_IDS = ["start", "kalender", "aufgaben", "schule", "punkte", "essen", "einkauf", "wartung", "muell", "einstellungen"];
+
   // ---------- Panel ----------
   class FamilienzentralePanel extends HTMLElement {
     constructor() {
@@ -712,6 +743,7 @@ label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--mu
     get hass() { return this._hass; }
     set narrow(v) { var ch = this._narrow !== v; this._narrow = v; if (ch && this.state) this.render(); }
     set panel(p) { this._panel = p; }
+    _wand() { return this.getAttribute("data-stil") === "wand"; }
     useDemo(seed) { this.backend = new MockBackend(seed); this.backend.onChange = (s) => { this.state = s; this.render(); }; this._start(); }
 
     connectedCallback() {
@@ -721,19 +753,25 @@ label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--mu
         this.shadowRoot.addEventListener("change", (e) => this._onChange(e));
         this.shadowRoot.addEventListener("keydown", (e) => { if (e.key === "Enter" && e.target && e.target.id === "shopin") { e.preventDefault(); this._shopAdd(); } });
         ["pointerdown", "keydown", "touchstart"].forEach((ev) => this.shadowRoot.addEventListener(ev, () => this._resetIdle(), { passive: true }));
-        this._clock = setInterval(() => { var c = this.shadowRoot.querySelector(".clock"); if (c) c.textContent = this._time(); }, 15000);
       }
+      clearInterval(this._clock);
+      this._clock = setInterval(() => { var c = this.shadowRoot.querySelector(".clock"); if (c) c.textContent = this._time(); }, 15000);
+      if (this.backend && this._detached) { this._detached = false; this._start(); }
       if (!this.backend && !window.hassConnection && !this._hass) {
         // Ohne Home Assistant: Vorschau mit Demodaten
         setTimeout(() => { if (!this.backend) this.useDemo(window.FAMILIENZENTRALE_DEMO); }, 50);
       }
     }
-    disconnectedCallback() { clearInterval(this._clock); clearTimeout(this._idle); clearInterval(this._frameTimer); if (this._unsub) { try { this._unsub(); } catch (e) { /* egal */ } } }
+    disconnectedCallback() {
+      clearInterval(this._clock); clearTimeout(this._idle); clearInterval(this._frameTimer);
+      if (this._unsub) { try { this._unsub(); } catch (e) { /* egal */ } this._unsub = null; }
+      this._detached = true;
+    }
 
     _start() {
       this.backend.load().then((s) => { this.state = s; this.render(); this._resetIdle(); }).catch((e) => this._error(e));
       if (this.backend.subscribe) {
-        Promise.resolve(this.backend.subscribe((s) => { this.state = s; this.render(); })).then((u) => { this._unsub = u; }).catch(() => { /* altes Backend */ });
+        Promise.resolve(this.backend.subscribe((s) => { this.state = s; this.render(); })).then((u) => { if (this._detached) { try { u(); } catch (e) { /* egal */ } } else this._unsub = u; }).catch(() => { /* altes Backend */ });
       }
     }
     _root() {
@@ -781,13 +819,15 @@ label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--mu
     render() {
       if (!this.state) return;
       var st = this.state, m = st.settings.modules || {};
-      this.setAttribute("data-theme", st.settings.theme || "hell");
+      this.setAttribute("data-theme", this._wand() ? "dunkel" : (st.settings.theme || "hell"));
       var nav = NAV.filter((n) => n[0] === "start" || m[n[0]] !== false);
       if (nav.map((n) => n[0]).indexOf(this.view) < 0 && this.view !== "einstellungen") this.view = "start";
       var body = this["v_" + this.view] ? this["v_" + this.view]() : "";
       var scroll = this.shadowRoot.querySelector(".main");
       var top = scroll ? scroll.scrollTop : 0;
       var menu = this._hass && this._narrow ? "<button data-act='hamenu'><span class='i'>☰</span>Menü</button>" : "";
+      var cfg = this._cfg || {};
+      if (cfg.zurueck) menu = "<button class='back' data-act='back'><span class='i'>←</span>" + esc(cfg.zurueck_text || "Start") + "</button>" + menu;
       this._root().innerHTML = "<div class='app'><nav class='rail'>" + menu +
         nav.map((n) => "<button data-act='nav' data-v='" + n[0] + "' class='" + (this.view === n[0] ? "on" : "") + "'><span class='i'>" + n[1] + "</span>" + n[2] + "</button>").join("") +
         "<span class='sp'></span><button data-act='nav' data-v='einstellungen' class='" + (this.view === "einstellungen" ? "on" : "") + "'><span class='i'>⚙️</span>Einstellungen</button></nav>" +
@@ -799,38 +839,8 @@ label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--mu
 
     v_start() {
       var st = this.state, t = todayIso(), now = new Date();
-      var head = "<div class='head'><span class='clock'>" + this._time() + "</span><span class='sub'>" + WD_LANG[wd(now)] + ", " + now.getDate() + ". " + MON[now.getMonth()] + " " + now.getFullYear() + "</span><span class='grow'></span>" + this._pendingBadge() + "<button class='btn sec sm' data-act='theme' title='Hell / Dunkel'>" + (st.settings.theme === "dunkel" ? "☀️ Hell" : "🌙 Dunkel") + "</button></div>";
-      var cols = st.persons.map((p) => {
-        var evs = this._eventsOn(t).filter((e) => e.person === p.id);
-        var tasks = st.tasks.filter((x) => Logic.taskToday(x, p.id));
-        var rts = st.routines.filter((r) => (r.persons || []).indexOf(p.id) >= 0 && Logic.routineToday(r));
-        var done = tasks.filter((x) => Logic.taskDoneFor(x, p.id)).length, total = tasks.length;
-        rts.forEach((r) => { var pr = Logic.routineProgress(r, p.id); done += pr[0]; total += pr[1]; });
-        var open = tasks.filter((x) => !Logic.taskDoneFor(x, p.id));
-        var bodyHtml = "";
-        var rows = evs.map((e) => ({ t: this._evTime(e), html: esc(e.title) }));
-        if (st.settings.modules.schule !== false) {
-          var les = Logic.lessonsOn(st, p.id, t);
-          if (les.length) rows.push({ t: les[0].start, html: "🏫 Schule bis " + esc(les[les.length - 1].end) });
-          Logic.activitiesOn(st, t, p.id).forEach((a) => rows.push({ t: a.start || "", html: esc(a.icon || "🎯") + " " + esc(a.name) + (a.bring ? " <span class='muted small'>· " + esc(a.bring) + "</span>" : "") }));
-        }
-        rows.sort((a, b) => (a.t === "ganzt." ? "" : a.t) < (b.t === "ganzt." ? "" : b.t) ? -1 : 1);
-        bodyHtml += rows.length ? rows.map((r) => "<div class='ev'><span class='bar' style='background:" + esc(p.color) + "'></span><span class='t'>" + esc(r.t) + "</span><span>" + r.html + "</span></div>").join("") : "<div class='empty'>Keine Termine heute</div>";
-        if (total) {
-          bodyHtml += "<div class='row small muted'><span>Heute " + done + "/" + total + "</span></div><div class='prog'><i style='width:" + Math.round(100 * done / total) + "%;background:" + esc(p.color) + "'></i></div>";
-          rts.forEach((r) => {
-            var pr = Logic.routineProgress(r, p.id), ok = pr[0] === pr[1];
-            if (!(r.steps || []).length) {
-              bodyHtml += "<div class='task " + (ok ? "done" : "") + "'><span class='ic'>" + esc(r.icon || "•") + "</span><span class='nm'>" + esc(r.name) + "</span><button class='chk " + (ok ? "on" : "") + "' data-act='rstep' data-r='" + r.id + "' data-p='" + p.id + "' data-s='*'>" + (ok ? "✓" : "") + "</button></div>";
-            } else {
-              bodyHtml += "<button class='task' style='border:0;text-align:left' data-act='nav' data-v='aufgaben'><span class='ic'>" + esc(r.icon || "•") + "</span><span class='nm'>" + esc(r.name) + "</span><b class='small' style='color:" + (ok ? "var(--ok)" : "var(--muted)") + "'>" + pr[0] + "/" + pr[1] + (ok ? " ✓" : "") + "</b></button>";
-            }
-          });
-          bodyHtml += open.slice(0, 4).map((x) => this._taskRow(x, p.id)).join("");
-          if (open.length > 4) bodyHtml += "<div class='small muted'>+ " + (open.length - 4) + " weitere</div>";
-        }
-        return "<div class='pcol'><div class='ph' style='background:" + esc(p.color) + ";color:" + textOn(p.color) + "'>" + this.av(p) + "<span class='pname'>" + esc(p.name) + "</span>" + (p.points_enabled && st.settings.modules.punkte !== false ? "<span class='pts'>⭐ " + Logic.points(st, p.id) + (Logic.available(st, p.id) !== Logic.points(st, p.id) ? " <small>(" + Logic.available(st, p.id) + " frei)</small>" : "") + "</span>" : "") + "</div><div class='pb'>" + bodyHtml + "</div></div>";
-      }).join("");
+      var head = "<div class='head'><span class='clock'>" + this._time() + "</span><span class='sub'>" + WD_LANG[wd(now)] + ", " + now.getDate() + ". " + MON[now.getMonth()] + " " + now.getFullYear() + "</span><span class='grow'></span>" + this._pendingBadge() + (this._wand() ? "" : "<button class='btn sec sm' data-act='theme' title='Hell / Dunkel'>" + (st.settings.theme === "dunkel" ? "☀️ Hell" : "🌙 Dunkel") + "</button>") + "</div>";
+      var cols = st.persons.map((p) => this._personCol(p, t, false)).join("");
       var allEv = this._eventsOn(t).filter((e) => !e.person || !this.person(e.person));
       var common = allEv.length ? "<div class='card' style='margin-bottom:14px'><h3>👪 Alle</h3><div class='list'>" + allEv.map((e) => "<div class='ev'><span class='bar' style='background:var(--accent)'></span><span class='t'>" + this._evTime(e) + "</span><span>" + esc(e.title) + "</span></div>").join("") + "</div></div>" : "";
       var m = st.settings.modules, cards = [];
@@ -853,6 +863,39 @@ label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--mu
       }
       if (!st.persons.length) cols = "<div class='card'><h3>👋 Willkommen</h3><p>Noch keine Personen erfasst. Unter <b>⚙️ Einstellungen → Personen</b> legst du die Familie an, mit Farbe und Foto.</p><button class='btn' data-act='nav' data-v='einstellungen'>Zu den Einstellungen</button></div>";
       return head + "<div class='people'>" + cols + "</div>" + common + "<div class='bottom'>" + cards.join("") + "</div>";
+    }
+
+    _personCol(p, t, mini) {
+      var st = this.state;
+      var evs = this._eventsOn(t).filter((e) => e.person === p.id);
+      var tasks = st.tasks.filter((x) => Logic.taskToday(x, p.id));
+      var rts = st.routines.filter((r) => (r.persons || []).indexOf(p.id) >= 0 && Logic.routineToday(r));
+      var done = tasks.filter((x) => Logic.taskDoneFor(x, p.id)).length, total = tasks.length;
+      rts.forEach((r) => { var pr = Logic.routineProgress(r, p.id); done += pr[0]; total += pr[1]; });
+      var open = tasks.filter((x) => !Logic.taskDoneFor(x, p.id));
+      var bodyHtml = "";
+      var rows = evs.map((e) => ({ t: this._evTime(e), html: esc(e.title) }));
+      if (st.settings.modules.schule !== false) {
+        var les = Logic.lessonsOn(st, p.id, t);
+        if (les.length) rows.push({ t: les[0].start, html: "🏫 Schule bis " + esc(les[les.length - 1].end) });
+        Logic.activitiesOn(st, t, p.id).forEach((a) => rows.push({ t: a.start || "", html: esc(a.icon || "🎯") + " " + esc(a.name) + (a.bring ? " <span class='muted small'>· " + esc(a.bring) + "</span>" : "") }));
+      }
+      rows.sort((a, b) => (a.t === "ganzt." ? "" : a.t) < (b.t === "ganzt." ? "" : b.t) ? -1 : 1);
+      bodyHtml += rows.length ? rows.map((r) => "<div class='ev'><span class='bar' style='background:" + esc(p.color) + "'></span><span class='t'>" + esc(r.t) + "</span><span>" + r.html + "</span></div>").join("") : "<div class='empty'>Keine Termine heute</div>";
+      if (total) {
+        bodyHtml += "<div class='row small muted'><span>Heute " + done + "/" + total + "</span></div><div class='prog'><i style='width:" + Math.round(100 * done / total) + "%;background:" + esc(p.color) + "'></i></div>";
+        rts.forEach((r) => {
+          var pr = Logic.routineProgress(r, p.id), ok = pr[0] === pr[1];
+          if (!(r.steps || []).length) {
+            bodyHtml += "<div class='task " + (ok ? "done" : "") + "'><span class='ic'>" + esc(r.icon || "•") + "</span><span class='nm'>" + esc(r.name) + "</span><button class='chk " + (ok ? "on" : "") + "' data-act='rstep' data-r='" + r.id + "' data-p='" + p.id + "' data-s='*'>" + (ok ? "✓" : "") + "</button></div>";
+          } else {
+            bodyHtml += "<button class='task' style='border:0;text-align:left' data-act='nav' data-v='aufgaben'><span class='ic'>" + esc(r.icon || "•") + "</span><span class='nm'>" + esc(r.name) + "</span><b class='small' style='color:" + (ok ? "var(--ok)" : "var(--muted)") + "'>" + pr[0] + "/" + pr[1] + (ok ? " ✓" : "") + "</b></button>";
+          }
+        });
+        bodyHtml += open.slice(0, mini ? 3 : 4).map((x) => this._taskRow(x, p.id)).join("");
+        if (open.length > (mini ? 3 : 4)) bodyHtml += "<div class='small muted'>+ " + (open.length - (mini ? 3 : 4)) + " weitere</div>";
+      }
+      return "<div class='pcol'><div class='ph' style='background:" + esc(p.color) + ";color:" + textOn(p.color) + "'>" + this.av(p) + "<span class='pname'>" + esc(p.name) + "</span>" + (p.points_enabled && st.settings.modules.punkte !== false ? "<span class='pts'>⭐ " + Logic.points(st, p.id) + (!mini && Logic.available(st, p.id) !== Logic.points(st, p.id) ? " <small>(" + Logic.available(st, p.id) + " frei)</small>" : "") + "</span>" : "") + "</div><div class='pb'>" + bodyHtml + "</div></div>";
     }
 
     _pendingBadge() {
@@ -1108,7 +1151,8 @@ label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--mu
       var a = el.getAttribute("data-act"), id = el.getAttribute("data-id"), v = el.getAttribute("data-v");
       var st = this.state;
       switch (a) {
-        case "nav": this.view = v; this.render(); break;
+        case "nav": if (this._navOut) { this._navOut(v); break; } this.view = v; this.render(); break;
+        case "back": navigateTo((this._cfg || {}).zurueck || "/"); break;
         case "reload": location.reload(); break;
         case "hamenu": this.dispatchEvent(new CustomEvent("hass-toggle-menu", { bubbles: true, composed: true })); break;
         case "calmode": this.sub.cal = v; this.render(); break;
@@ -1627,7 +1671,86 @@ label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--mu
     }
   }
 
+  // ---------- Dashboard-Karten ----------
+  // Ganze Familienzentrale als Karte (z. B. in einer Dashboard-Seite vom Typ „Panel“)
+  //   type: custom:familienzentrale-card
+  //   stil: wand                  durchsichtig, Glas-Kacheln, immer dunkel
+  //   zurueck: /wand-ipad/start   Knopf „← Start“
+  //   ansicht: einkauf            Bereich beim Öffnen (sonst Start); auch über #einkauf in der Adresse
+  //   hoehe: 100vh                Höhe der Karte
+  class FamilienzentraleCard extends FamilienzentralePanel {
+    setConfig(c) {
+      this._cfg = Object.assign({}, c || {});
+      this.setAttribute("data-embed", "");
+      if (this._cfg.stil) this.setAttribute("data-stil", this._cfg.stil); else this.removeAttribute("data-stil");
+      if (this._cfg.hoehe) this.style.setProperty("--fz-hoehe", this._cfg.hoehe); else this.style.removeProperty("--fz-hoehe");
+      if (this.state) this.render();
+    }
+    connectedCallback() {
+      super.connectedCallback();
+      this.view = this._hashView() || (this._cfg && this._cfg.ansicht) || "start";
+      if (this.state) this.render();
+      if (!this._onLoc) {
+        this._onLoc = () => { var v = this._hashView(); if (v && this.isConnected && v !== this.view) { this.view = v; if (this.state) this.render(); } };
+        window.addEventListener("location-changed", this._onLoc);
+        window.addEventListener("hashchange", this._onLoc);
+      }
+    }
+    _hashView() { var h = String(location.hash || "").slice(1); return NAV_IDS.indexOf(h) >= 0 ? h : null; }
+    _resetIdle() { /* Bilderrahmen nur in der eigenen Seite */ }
+    getCardSize() { return 12; }
+    getGridOptions() { return { columns: "full", rows: 12 }; }
+    static getStubConfig() { return { stil: "wand", zurueck: "/" }; }
+  }
+
+  // Kompakte Übersicht „Heute“ für eine Startseite
+  //   type: custom:familienzentrale-heute-card
+  //   stil: wand
+  //   ziel: /wand-ipad/familie    Seite mit der ganzen Familienzentrale (Tippen öffnet sie)
+  //   titel: Heute
+  class FamilienzentraleHeuteCard extends FamilienzentralePanel {
+    setConfig(c) {
+      this._cfg = Object.assign({}, c || {});
+      if (this._cfg.stil) this.setAttribute("data-stil", this._cfg.stil); else this.removeAttribute("data-stil");
+      this.style.height = "100%";
+      if (this.state) this.render();
+    }
+    _navOut(v) { var z = (this._cfg || {}).ziel; if (z) navigateTo(z + (v && v !== "start" ? "#" + v : "")); }
+    _resetIdle() { /* kein Bilderrahmen */ }
+    render() {
+      if (!this.state) return;
+      var st = this.state, t = todayIso(), m = st.settings.modules || {};
+      this.setAttribute("data-theme", this._wand() ? "dunkel" : (st.settings.theme || "hell"));
+      var n = (st.pending || []).length;
+      var head = "<div class='hh'><b data-act='nav' data-v='start'>👪 " + esc((this._cfg || {}).titel || "Heute") + "</b><span style='flex:1'></span>" +
+        (n ? "<button class='btn sm' data-act='nav' data-v='punkte'>🔔 " + n + " zu bestätigen</button>" : "") + "</div>";
+      var allEv = this._eventsOn(t).filter((e) => !e.person || !this.person(e.person));
+      var common = allEv.length ? "<div class='line'>👪 " + allEv.map((e) => "<b>" + esc(this._evTime(e)) + "</b> " + esc(e.title)).join(" · ") + "</div>" : "";
+      var food = "";
+      if (m.essen !== false) {
+        var x = st.meals[t] || {};
+        var names = slotsOf(st).filter((sl) => x[sl[0]]).map((sl) => esc(x[sl[0]].name));
+        if (names.length) food = "<div class='line' data-act='nav' data-v='essen'>🍽️ " + names.join(" · ") + "</div>";
+      }
+      var cols = st.persons.map((p) => this._personCol(p, t, true)).join("");
+      var body = st.persons.length ? "<div class='people mini'>" + cols + "</div>" : "<div class='empty'>Noch keine Personen erfasst</div>";
+      this._root().innerHTML = "<div class='heute'>" + head + "<div class='hb'>" + common + body + food + "</div></div>";
+    }
+    getCardSize() { return 8; }
+    getGridOptions() { return { columns: 12, rows: 8 }; }
+    static getStubConfig() { return { stil: "wand", ziel: "/" }; }
+  }
+
   if (!customElements.get("familienzentrale-panel")) customElements.define("familienzentrale-panel", FamilienzentralePanel);
+  if (!customElements.get("familienzentrale-card")) customElements.define("familienzentrale-card", FamilienzentraleCard);
+  if (!customElements.get("familienzentrale-heute-card")) customElements.define("familienzentrale-heute-card", FamilienzentraleHeuteCard);
+  window.customCards = window.customCards || [];
+  if (!window.customCards.some(function (c) { return c.type === "familienzentrale-card"; })) {
+    window.customCards.push(
+      { type: "familienzentrale-card", name: "Familienzentrale", description: "Die ganze Familienzentrale in einer Dashboard-Seite" },
+      { type: "familienzentrale-heute-card", name: "Familienzentrale – Heute", description: "Termine, Routinen und Aufgaben pro Person für heute" }
+    );
+  }
   window.FamilienzentraleLogic = Logic;
   window.FamilienzentraleDemoSeed = DEMO_SEED;
 })();
