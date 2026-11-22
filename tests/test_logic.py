@@ -104,6 +104,15 @@ def test_waste_anchor():
     assert logic.waste_dates(w, 1, D) == [date(2026, 11, 24)]
 
 
+def test_version_sync():
+    import re
+    root = Path(__file__).resolve().parents[1] / "custom_components" / "familienzentrale"
+    const = re.search(r'VERSION = "([^"]+)"', (root / "const.py").read_text(encoding="utf-8")).group(1)
+    panel = re.search(r'PANEL_VERSION = "([^"]+)"', (root / "frontend" / "familienzentrale-panel.js").read_text(encoding="utf-8")).group(1)
+    manifest = re.search(r'"version": "([^"]+)"', (root / "manifest.json").read_text(encoding="utf-8")).group(1)
+    assert const == panel == manifest, (const, panel, manifest)
+
+
 def test_maint():
     assert logic.maint_status({"next": "2026-11-20"}, D) == "ueberfaellig"
     assert logic.maint_status({"next": "2026-11-25", "warn_days": 7}, D) == "bald"

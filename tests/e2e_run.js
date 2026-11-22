@@ -254,6 +254,14 @@ export async function run() {
   d = await dbg();
   check("Automatisch: Zutaten sofort in Bring", d.todo["todo.zuhause"].some((i) => i.summary === "Haferflocken") && toasts().some((t) => t.includes("Zutaten an Bring")));
   await nav("einstellungen"); await chg("select[data-chg=mealie][data-k=to_bring]", "button");
+  // Ältere Oberfläche (nur Slug) und Notizen mit Rezeptnamen
+  await el.act("set_meal", { date: otherIso, slot: "mittag", meal: { name: "Gemüsecurry", recipe: "gemuesecurry" } });
+  d = await dbg();
+  check("Nur Slug: Rezept-ID wird nachgeschlagen", d.mealie.some((x) => x.type === "lunch" && x.recipe === "Gemüsecurry"), d.mealie);
+  const byName = await el.backend.act("recipe_ingredients", { recipe_ids: [], names: ["spaghetti bolognese", "Unbekannt"] });
+  check("Notiz mit Rezeptnamen liefert Zutaten", (byName.items || []).some((i) => i.name === "Spaghetti"), byName);
+  check("Kein Versionshinweis bei gleicher Version", !txt().includes("neue Version"));
+
   // Ohne Mealie: lokaler Plan
   await fetch("/api/mealie_off", { method: "POST", body: "{}" });
   await el.backend.load().then((s2) => { el.state = s2; el.render(); });

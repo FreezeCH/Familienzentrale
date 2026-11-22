@@ -167,6 +167,30 @@ class MealieBridge:
             out.append({"slug": r.get("slug"), "name": r.get("name"), "recipe_id": str(r.get("recipe_id")) if r.get("recipe_id") else None, "image": self._image(r)})
         return out
 
+    async def async_recipe_id(self, slug_or_id: str) -> str | None:
+        try:
+            res = await self._call("get_recipe", {"recipe_id": slug_or_id})
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.warning("Rezept %s nicht gefunden: %s", slug_or_id, err)
+            return None
+        rid = ((res or {}).get("recipe") or {}).get("recipe_id")
+        return str(rid) if rid else None
+
+    async def async_find_by_name(self, name: str) -> str | None:
+        """Rezept mit genau diesem Namen (Gross-/Kleinschreibung egal) suchen."""
+        name = (name or "").strip()
+        if not name:
+            return None
+        try:
+            found = await self.async_search(name, 10)
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.warning("Rezeptsuche nach %s fehlgeschlagen: %s", name, err)
+            return None
+        for r in found:
+            if (r.get("name") or "").strip().casefold() == name.casefold():
+                return r.get("recipe_id") or r.get("slug")
+        return None
+
     async def async_ingredients(self, recipe_ids: list[str]) -> list[dict[str, str]]:
         """Zutaten mehrerer Rezepte, gleiche Lebensmittel zusammengefasst."""
         merged: dict[str, dict[str, Any]] = {}

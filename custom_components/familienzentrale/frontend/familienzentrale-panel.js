@@ -8,6 +8,7 @@
  */
 (function () {
   "use strict";
+  var PANEL_VERSION = "0.4.1"; // muss zu const.py VERSION passen
 
   // ---------- Hilfsfunktionen ----------
   var pad = function (n) { return String(n).padStart(2, "0"); };
@@ -327,6 +328,7 @@
       }
       case "recipe_ingredients": {
         var out = [];
+        (data.names || []).forEach(function (n) { var rr = st.recipes.filter(function (x) { return x.name.toLowerCase() === String(n).toLowerCase(); })[0]; if (rr) data.recipe_ids = (data.recipe_ids || []).concat([rr.slug]); });
         (data.recipe_ids || []).forEach(function (rid) { recipeIngredients(st, rid).forEach(function (n) { if (!out.some(function (o) { return o.name === n; })) out.push({ name: n, spec: "" }); }); });
         return Promise.resolve({ items: out });
       }
@@ -681,7 +683,7 @@ label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--mu
       this._root().innerHTML = "<div class='app'><nav class='rail'>" + menu +
         nav.map((n) => "<button data-act='nav' data-v='" + n[0] + "' class='" + (this.view === n[0] ? "on" : "") + "'><span class='i'>" + n[1] + "</span>" + n[2] + "</button>").join("") +
         "<span class='sp'></span><button data-act='nav' data-v='einstellungen' class='" + (this.view === "einstellungen" ? "on" : "") + "'><span class='i'>⚙️</span>Einstellungen</button></nav>" +
-        "<main class='main'>" + body + "</main></div>";
+        "<main class='main'>" + (st.version && st.version !== PANEL_VERSION ? "<div class='card' style='margin-bottom:14px;border:2px solid var(--warn)'>🔄 Es ist eine neue Version der Familienzentrale installiert (" + esc(st.version) + "). Bitte die Seite neu laden. <button class='btn sm' data-act='reload'>Neu laden</button></div>" : "") + body + "</main></div>";
       var nm = this.shadowRoot.querySelector(".main");
       if (nm && this._keepScroll) nm.scrollTop = top;
       this._keepScroll = false;
@@ -942,6 +944,7 @@ label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--mu
       var st = this.state;
       switch (a) {
         case "nav": this.view = v; this.render(); break;
+        case "reload": location.reload(); break;
         case "hamenu": this.dispatchEvent(new CustomEvent("hass-toggle-menu", { bubbles: true, composed: true })); break;
         case "calmode": this.sub.cal = v; this.render(); break;
         case "calnav": {
@@ -1259,18 +1262,23 @@ label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--mu
       search();
     }
     _weekBring(startIso) {
-      var st = this.state, ids = [];
+      var st = this.state, ids = [], names = [];
       for (var i = 0; i < 7; i++) {
         var d = iso(addDays(parse(startIso), i));
-        slotsOf(st).forEach((sl) => { var m = (st.meals[d] || {})[sl[0]]; var rid = m && (m.recipe_id || m.recipe); if (rid && ids.indexOf(rid) < 0) ids.push(rid); });
+        slotsOf(st).forEach((sl) => {
+          var m = (st.meals[d] || {})[sl[0]]; if (!m) return;
+          var rid = m.recipe_id || m.recipe;
+          if (rid) { if (ids.indexOf(rid) < 0) ids.push(rid); }
+          else if (m.name && names.indexOf(m.name) < 0) names.push(m.name);
+        });
       }
-      if (!ids.length) return this.toast("Diese Woche sind keine Rezepte aus Mealie geplant");
+      if (!ids.length && !names.length) return this.toast("In der angezeigten Woche ist noch nichts geplant");
       this.toast("Zutaten werden geladen …");
-      this.backend.act("recipe_ingredients", { recipe_ids: ids }).then((r) => {
+      this.backend.act("recipe_ingredients", { recipe_ids: ids, names: names }).then((r) => {
         var items = (r && r.items) || [];
-        if (!items.length) return this.toast("Keine Zutaten gefunden");
+        if (!items.length) return this.toast("Keine Zutaten gefunden – sind die Gerichte als Rezepte in Mealie geplant?");
         var have = st.shopping.map((x) => x.summary.toLowerCase());
-        var dlg = this.dialog("🛒 Zutaten an Bring", "<p class='small muted'>" + ids.length + " Rezept(e). Abwählen, was schon da ist. Was bereits auf der Liste steht, ist abgewählt.</p><div class='list'>" + items.map((it, n) => "<label class='task'><input type='checkbox' data-n='" + n + "'" + (have.indexOf(it.name.toLowerCase()) < 0 ? " checked" : "") + "><span class='nm'>" + esc(it.name) + (it.spec ? " <span class='muted'>" + esc(it.spec) + "</span>" : "") + (it.recipes && it.recipes.length ? "<br><span class='small muted'>" + esc(it.recipes.join(", ")) + "</span>" : "") + "</span></label>").join("") + "</div>",
+        var dlg = this.dialog("🛒 Zutaten an Bring", "<p class='small muted'>Abwählen, was schon da ist. Was bereits auf der Liste steht, ist abgewählt.</p><div class='list'>" + items.map((it, n) => "<label class='task'><input type='checkbox' data-n='" + n + "'" + (have.indexOf(it.name.toLowerCase()) < 0 ? " checked" : "") + "><span class='nm'>" + esc(it.name) + (it.spec ? " <span class='muted'>" + esc(it.spec) + "</span>" : "") + (it.recipes && it.recipes.length ? "<br><span class='small muted'>" + esc(it.recipes.join(", ")) + "</span>" : "") + "</span></label>").join("") + "</div>",
           [["Abbrechen", "sec"], ["An Bring senden", "", () => {
             var sel = Array.prototype.map.call(dlg.querySelectorAll("input:checked"), (x) => items[Number(x.getAttribute("data-n"))]);
             return this.act("send_to_bring", { items: sel }).then((res) => this.toast("🛒 " + (res && res.added != null ? res.added : sel.length) + " Artikel an Bring"));

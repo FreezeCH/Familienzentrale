@@ -1,7 +1,7 @@
 """Konstanten der Familienzentrale."""
 
 DOMAIN = "familienzentrale"
-VERSION = "0.4.0"
+VERSION = "0.4.1"
 
 STORAGE_KEY = "familienzentrale.daten"
 STORAGE_VERSION = 1

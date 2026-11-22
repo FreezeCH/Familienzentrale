@@ -30,6 +30,7 @@ from .const import (
     PIN_UNLOCK_SECONDS,
     STORAGE_KEY,
     STORAGE_VERSION,
+    VERSION,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -257,6 +258,7 @@ class FamilienzentraleHub:
         st["calendar_list"] = self._entities_of("calendar")
         st["ha_persons"] = self._entities_of("person")
         st["recipes"] = []
+        st["version"] = VERSION
         st["mealie"] = {"ok": False, "error": None}
         if self.mealie.available:
             ws = self.today() - timedelta(days=self.today().weekday())
@@ -588,6 +590,9 @@ class FamilienzentraleHub:
         elif action == "set_meal":
             day, slot, meal = str(data.get("date")), str(data.get("slot")), data.get("meal")
             if self.mealie.available:
+                if meal and meal.get("recipe") and not meal.get("recipe_id"):
+                    # ältere Oberfläche schickt nur den Rezept-Slug: ID in Mealie nachschlagen
+                    meal["recipe_id"] = await self.mealie.async_recipe_id(str(meal["recipe"]))
                 ws = today - timedelta(days=today.weekday())
                 cur = (await self.mealie.async_meals(ws, ws + timedelta(days=13))).get(day, {}).get(slot)
                 await self.mealie.async_set_meal(day, slot, meal, cur)
@@ -605,7 +610,13 @@ class FamilienzentraleHub:
         elif action == "recipe_ingredients":
             if not self.mealie.available:
                 return {"items": []}
-            return {"items": await self.mealie.async_ingredients([str(x) for x in data.get("recipe_ids") or []])}
+            ids = [str(x) for x in data.get("recipe_ids") or []]
+            for name in data.get("names") or []:
+                # Notiz mit dem Namen eines Rezepts: dieses Rezept verwenden
+                rid = await self.mealie.async_find_by_name(str(name))
+                if rid and rid not in ids:
+                    ids.append(rid)
+            return {"items": await self.mealie.async_ingredients(ids)}
 
         elif action == "frame_photo":
             raise HomeAssistantError("Bilderrahmen folgt in Etappe 5")
