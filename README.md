@@ -14,7 +14,7 @@ Ein Familienplaner als eigenes Panel in Home Assistant, für das Wand-Tablet und
 Alles wird in der Oberfläche eingestellt. Es gibt kein YAML.
 
 ## Status
-In Entwicklung (Version 0.3.2).
+In Entwicklung (Version 0.4.0).
 
 | Teil | Stand |
 |---|---|
@@ -24,7 +24,7 @@ In Entwicklung (Version 0.3.2).
 | Symbolauswahl, Kalender nach Personen filtern | fertig |
 | Wartung, Müll (Anzeige und Erfassung) | fertig |
 | Einkauf über eine To-do-Liste (z. B. Bring) | fertig |
-| Essensplan mit Mealie (Rezeptsuche, Plan, Zutaten) | folgt |
+| Essensplan mit Mealie: Wochenplan lesen und schreiben, Rezeptsuche mit Bildern, Zutaten mit Mengen an die Einkaufsliste, Gerichtstypen wählbar | fertig |
 | Erinnerungen über Telegram und Sonos | folgt |
 | Bilderrahmen | folgt |
 

@@ -47,7 +47,8 @@
     "Super gemacht! 🌟", "Klasse, danke dir! 🙌", "Wow, schon erledigt! 🚀", "Du bist spitze! 💪",
     "Danke, das hilft allen! 💛", "Prima! Weiter so! 🎉", "Toll gemacht! 🏆", "Bravo! 👏"
   ];
-  var SLOTS = [["fruehstueck", "Frühstück"], ["mittag", "Mittag"], ["abend", "Abend"]];
+  var ALL_SLOTS = [["fruehstueck", "Frühstück"], ["mittag", "Mittag"], ["abend", "Abend"], ["beilage", "Beilage"], ["nachtisch", "Nachtisch"], ["snack", "Snack"], ["getraenk", "Getränk"]];
+  var slotsOf = function (st) { var on = (st && st.settings.mealie && st.settings.mealie.slots) || ["fruehstueck", "mittag", "abend"]; return ALL_SLOTS.filter(function (x) { return on.indexOf(x[0]) >= 0; }); };
   var TIMES = [["morgen", "Morgen 🌅"], ["mittag", "Mittag ☀️"], ["abend", "Abend 🌙"]];
   // Auswahl für Symbole (Routinen, Aufgaben, Belohnungen, Wartung, Müll)
   var ICONS = [
@@ -294,7 +295,7 @@
         st.meals[data.date] = st.meals[data.date] || {};
         st.meals[data.date][data.slot] = data.meal;
         if (data.meal && data.meal.recipe && st.settings.mealie.to_bring === "auto") {
-          addToBring(st, recipeIngredients(st, data.meal.recipe));
+          return Promise.resolve({ added: addToBring(st, recipeIngredients(st, data.meal.recipe)) }).then(this._done.bind(this));
         }
         break;
       case "send_to_bring":
@@ -322,7 +323,12 @@
         break;
       case "search_recipes": {
         var q = String(data.query || "").toLowerCase();
-        return Promise.resolve({ recipes: st.recipes.filter(function (r) { return !q || r.name.toLowerCase().indexOf(q) >= 0; }) });
+        return Promise.resolve({ recipes: st.recipes.filter(function (r) { return !q || r.name.toLowerCase().indexOf(q) >= 0; }).map(function (r) { return { slug: r.slug, name: r.name, recipe_id: r.slug }; }) });
+      }
+      case "recipe_ingredients": {
+        var out = [];
+        (data.recipe_ids || []).forEach(function (rid) { recipeIngredients(st, rid).forEach(function (n) { if (!out.some(function (o) { return o.name === n; })) out.push({ name: n, spec: "" }); }); });
+        return Promise.resolve({ items: out });
       }
       default:
         return Promise.reject(new Error("Unbekannte Aktion " + action));
@@ -339,7 +345,8 @@
     var have = st.shopping.map(function (x) { return x.summary.toLowerCase(); });
     var added = 0;
     items.forEach(function (it) {
-      if (have.indexOf(it.toLowerCase()) < 0) { st.shopping.push({ uid: uid(), summary: it, status: "needs_action" }); have.push(it.toLowerCase()); added++; }
+      var name = typeof it === "string" ? it : it.name;
+      if (name && have.indexOf(name.toLowerCase()) < 0) { st.shopping.push({ uid: uid(), summary: name, status: "needs_action" }); have.push(name.toLowerCase()); added++; }
     });
     return added;
   }
@@ -520,6 +527,8 @@ display:block;height:100%;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI
 .meals .sl{font-size:13px;color:var(--muted);display:flex;align-items:center}\
 .meal{border:1px dashed var(--line);background:var(--card);border-radius:10px;min-height:56px;padding:6px;font-size:12.5px;text-align:left}\
 .meal.set{border-style:solid}\
+.meal img{display:block;width:100%;height:46px;object-fit:cover;border-radius:6px;margin-bottom:3px}\
+.rimg{width:44px;height:44px;object-fit:cover;border-radius:8px;flex:none}\
 .status{width:10px;height:10px;border-radius:50%;display:inline-block}\
 .empty{color:var(--muted);font-size:14px;padding:6px 2px}\
 .toolbar{display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap}\
@@ -710,7 +719,7 @@ label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--mu
       var m = st.settings.modules, cards = [];
       if (m.essen !== false) {
         var tm = iso(addDays(now, 1));
-        var mealLine = (d, label) => { var x = st.meals[d] || {}; var s = SLOTS.filter((sl) => x[sl[0]]).map((sl) => esc(x[sl[0]].name)).join(" · "); return "<div class='row'><b style='min-width:62px'>" + label + "</b><span>" + (s || "<span class='muted'>noch nichts geplant</span>") + "</span></div>"; };
+        var mealLine = (d, label) => { var x = st.meals[d] || {}; var s = slotsOf(st).filter((sl) => x[sl[0]]).map((sl) => esc(x[sl[0]].name)).join(" · "); return "<div class='row'><b style='min-width:62px'>" + label + "</b><span>" + (s || "<span class='muted'>noch nichts geplant</span>") + "</span></div>"; };
         cards.push("<div class='card' data-act='nav' data-v='essen'><h3>🍽️ Essen</h3><div class='list'>" + mealLine(t, "Heute") + mealLine(tm, "Morgen") + "</div></div>");
       }
       if (m.muell !== false) {
@@ -852,15 +861,17 @@ label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--mu
       var st = this.state, off = this.sub.mealWeek || 0;
       var ws = addDays(weekStart(new Date()), off * 7), t = todayIso();
       var beh = { auto: "automatisch beim Eintragen", button: "auf Knopfdruck", never: "nie" }[st.settings.mealie.to_bring] || "";
-      var html = "<div class='head'><h1>Essensplan</h1><span class='sub'>aus Mealie · Zutaten an Bring: " + beh + "</span></div>";
+      var mo = st.mealie || {};
+      var src = this.backend instanceof MockBackend ? "Vorschau" : mo.ok ? "aus Mealie" : mo.error ? "⚠️ Mealie nicht erreichbar" : "Mealie nicht eingerichtet – Plan nur hier gespeichert";
+      var html = "<div class='head'><h1>Essensplan</h1><span class='sub'>" + esc(src) + " · Zutaten an Bring: " + beh + "</span></div>";
       html += "<div class='toolbar'><div class='tabs' style='margin:0'><button data-act='mealweek' data-v='0' class='" + (off === 0 ? "on" : "") + "'>Diese Woche</button><button data-act='mealweek' data-v='1' class='" + (off === 1 ? "on" : "") + "'>Nächste Woche</button></div><span style='flex:1'></span>" + (st.settings.mealie.to_bring !== "never" ? "<button class='btn' data-act='weekbring' data-v='" + iso(ws) + "'>🛒 Zutaten der Woche an Bring</button>" : "") + "</div>";
       html += "<div class='card'><div class='meals'><div></div>";
       for (var i = 0; i < 7; i++) { var d = iso(addDays(ws, i)); html += "<div class='h " + (d === t ? "today" : "") + "'>" + WD[i] + " " + parse(d).getDate() + ".</div>"; }
-      SLOTS.forEach((sl) => {
+      slotsOf(st).forEach((sl) => {
         html += "<div class='sl'>" + sl[1] + "</div>";
         for (var j = 0; j < 7; j++) {
           var dd = iso(addDays(ws, j)), m = (st.meals[dd] || {})[sl[0]];
-          html += "<button class='meal " + (m ? "set" : "") + "' data-act='meal' data-d='" + dd + "' data-s='" + sl[0] + "'>" + (m ? esc(m.name) + (m.recipe ? " <span class='muted'>📖</span>" : "") : "<span class='muted'>＋</span>") + "</button>";
+          html += "<button class='meal " + (m ? "set" : "") + "' data-act='meal' data-d='" + dd + "' data-s='" + sl[0] + "'>" + (m ? (m.image ? "<img src='" + esc(m.image) + "' alt='' loading='lazy' onerror='this.remove()'>" : "") + esc(m.name) + (m.recipe ? " <span class='muted'>📖</span>" : "") + (m.more ? " <span class='muted'>+" + m.more + "</span>" : "") : "<span class='muted'>＋</span>") + "</button>";
         }
       });
       return html + "</div></div>";
@@ -912,7 +923,7 @@ label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--mu
         "<label class='f'>Farbschema<select data-chg='set' data-k='theme'><option value='hell'" + (s.theme === "hell" ? " selected" : "") + ">Hell</option><option value='dunkel'" + (s.theme === "dunkel" ? " selected" : "") + ">Dunkel</option></select></label>" +
         "<label class='row'><input type='checkbox' data-chg='setbool' data-k='lock_calendar' " + (s.lock_calendar ? "checked" : "") + "> Termine anlegen/löschen nur mit PIN</label>" +
         "<button class='btn sec' data-act='newpin'>🔑 PIN ändern</button></div></div>" +
-        "<div class='card set-sec'><h3>🍽️ Mealie & Bring</h3><div class='form'><label class='f'>Zutaten an Bring<select data-chg='mealie' data-k='to_bring'>" + [["auto", "automatisch beim Eintragen"], ["button", "auf Knopfdruck (mit Auswahl)"], ["never", "nie"]].map((o) => "<option value='" + o[0] + "'" + (s.mealie.to_bring === o[0] ? " selected" : "") + ">" + o[1] + "</option>").join("") + "</select></label><label class='f'>Einkaufsliste für Zutaten und Einkauf<select data-chg='mealie' data-k='bring_list'><option value=''>– bitte wählen –</option>" + this._todoLists().map((o) => "<option value='" + esc(o.entity_id) + "'" + (s.mealie.bring_list === o.entity_id ? " selected" : "") + ">" + esc(o.name) + (o.platform === "bring" ? " · Bring" : "") + "</option>").join("") + "</select></label></div></div>" +
+        "<div class='card set-sec'><h3>🍽️ Mealie & Bring</h3><div class='form'><label class='f'>Zutaten an Bring<select data-chg='mealie' data-k='to_bring'>" + [["auto", "automatisch beim Eintragen"], ["button", "auf Knopfdruck (mit Auswahl)"], ["never", "nie"]].map((o) => "<option value='" + o[0] + "'" + (s.mealie.to_bring === o[0] ? " selected" : "") + ">" + o[1] + "</option>").join("") + "</select></label><label class='f'>Einkaufsliste für Zutaten und Einkauf<select data-chg='mealie' data-k='bring_list'><option value=''>– bitte wählen –</option>" + this._todoLists().map((o) => "<option value='" + esc(o.entity_id) + "'" + (s.mealie.bring_list === o.entity_id ? " selected" : "") + ">" + esc(o.name) + (o.platform === "bring" ? " · Bring" : "") + "</option>").join("") + "</select></label><div class='f'><span class='small muted'><b>Zeilen im Essensplan</b></span><div class='grid' style='grid-template-columns:repeat(auto-fill,minmax(130px,1fr))'>" + ALL_SLOTS.map((x) => "<label class='row'><input type='checkbox' data-chg='slot' data-v='" + x[0] + "'" + (slotsOf(st).some((y) => y[0] === x[0]) ? " checked" : "") + ">" + x[1] + "</label>").join("") + "</div></div></div></div>" +
         "<div class='card set-sec'><h3>🔔 Benachrichtigungen</h3><div class='form'><label class='f'>Telegram (Notify-Aktion)<input data-chg='notify' data-k='telegram' placeholder='notify.telegram_familie' value='" + esc(s.notify.telegram) + "'></label><label class='f'>Sonos-Lautsprecher (kommagetrennt)<input data-chg='notifylist' data-k='sonos' placeholder='media_player.sonos_kuche' value='" + esc((s.notify.sonos || []).join(", ")) + "'></label>" +
         "<div class='row'><label class='f' style='flex:1'>Ruhezeit von<input type='time' data-chg='notify' data-k='quiet_from' value='" + esc(s.notify.quiet_from) + "'></label><label class='f' style='flex:1'>bis<input type='time' data-chg='notify' data-k='quiet_to' value='" + esc(s.notify.quiet_to) + "'></label></div>" +
         "<label class='f'>Müll-Erinnerung am Vorabend um<input type='time' data-chg='notify' data-k='waste_time' value='" + esc(s.notify.waste_time) + "'></label></div></div>" +
@@ -990,6 +1001,7 @@ label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--mu
         case "setbool": save(k, el.checked); break;
         case "mealie": save("mealie", Object.assign({}, s.mealie, { [k]: el.value })); break;
         case "notify": save("notify", Object.assign({}, s.notify, { [k]: el.value })); break;
+        case "slot": { var on = slotsOf(this.state).map((x) => x[0]).filter((x) => x !== el.getAttribute("data-v")); if (el.checked) on.push(el.getAttribute("data-v")); on = ALL_SLOTS.map((x) => x[0]).filter((x) => on.indexOf(x) >= 0); if (!on.length) { el.checked = true; break; } save("mealie", Object.assign({}, s.mealie, { slots: on })); break; }
         case "notifylist": save("notify", Object.assign({}, s.notify, { [k]: el.value.split(",").map((x) => x.trim()).filter(Boolean) })); break;
         case "frame": save("frame", Object.assign({}, s.frame, { [k]: el.value })); break;
         case "framenum": save("frame", Object.assign({}, s.frame, { [k]: Number(el.value) || 1 })); break;
@@ -1228,36 +1240,42 @@ label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--mu
 
     _mealDlg(date, slot) {
       var cur = (this.state.meals[date] || {})[slot];
-      var dlg = this.dialog("🍽️ " + fmtDate(date) + " · " + SLOTS.filter((s) => s[0] === slot)[0][1],
+      var dlg = this.dialog("🍽️ " + fmtDate(date) + " · " + (ALL_SLOTS.filter((s) => s[0] === slot)[0] || ["", slot])[1],
         "<div class='form'><input id='rq' placeholder='Rezept in Mealie suchen oder frei eintippen' value='" + esc(cur ? cur.name : "") + "'><div id='rl' class='list'><div class='empty'>Suche …</div></div></div>",
         [["🗑️ Leeren", "bad", () => this.act("set_meal", { date: date, slot: slot, meal: null })], ["Abbrechen", "sec"], ["✓ Übernehmen (Freitext)", "", () => { var q = dlg.querySelector("#rq").value.trim(); return this.act("set_meal", { date: date, slot: slot, meal: q ? { name: q } : null }); }]]);
       var q = dlg.querySelector("#rq"), rl = dlg.querySelector("#rl"), timer;
       var search = () => this.backend.act("search_recipes", { query: q.value === (cur && cur.name) ? "" : q.value }).then((r) => {
-        rl.innerHTML = (r.recipes || []).slice(0, 12).map((x) => "<button class='task' style='border:0;text-align:left' data-slug='" + esc(x.slug) + "' data-name='" + esc(x.name) + "'><span class='ic'>📖</span><span class='nm'>" + esc(x.name) + "</span></button>").join("") || "<div class='empty'>Kein Rezept gefunden – mit „Übernehmen“ als Freitext eintragen.</div>";
-      }).catch(() => { rl.innerHTML = "<div class='empty'>Mealie nicht erreichbar</div>"; });
+        if (r.error) { rl.innerHTML = "<div class='empty'>" + esc(r.error) + " – mit „Übernehmen“ als Freitext eintragen.</div>"; return; }
+        rl.innerHTML = (r.recipes || []).slice(0, 24).map((x) => "<button class='task' style='border:0;text-align:left' data-slug='" + esc(x.slug || "") + "' data-rid='" + esc(x.recipe_id || x.slug || "") + "' data-img='" + esc(x.image || "") + "' data-name='" + esc(x.name) + "'>" + (x.image ? "<img class='rimg' src='" + esc(x.image) + "' alt='' loading='lazy' onerror='this.replaceWith(document.createTextNode(\"📖\"))'>" : "<span class='ic'>📖</span>") + "<span class='nm'>" + esc(x.name) + "</span></button>").join("") || "<div class='empty'>Kein Rezept gefunden – mit „Übernehmen“ als Freitext eintragen.</div>";
+      }).catch((e) => { rl.innerHTML = "<div class='empty'>Mealie nicht erreichbar: " + esc(e && e.message || e) + "</div>"; });
       q.addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(search, 250); });
       rl.addEventListener("click", (e) => {
         var b = e.target.closest("[data-slug]"); if (!b) return;
         this.closeDialog();
-        this.act("set_meal", { date: date, slot: slot, meal: { name: b.getAttribute("data-name"), recipe: b.getAttribute("data-slug") } }).then(() => {
-          if (this.state.settings.mealie.to_bring === "auto") this.toast("🛒 Zutaten an Bring geschickt");
+        this.act("set_meal", { date: date, slot: slot, meal: { name: b.getAttribute("data-name"), recipe: b.getAttribute("data-slug"), recipe_id: b.getAttribute("data-rid") } }).then((r) => {
+          if (r && r.added != null) this.toast("🛒 " + r.added + " Zutaten an Bring geschickt");
         });
       });
       search();
     }
     _weekBring(startIso) {
-      var st = this.state, items = [];
+      var st = this.state, ids = [];
       for (var i = 0; i < 7; i++) {
         var d = iso(addDays(parse(startIso), i));
-        SLOTS.forEach((sl) => { var m = (st.meals[d] || {})[sl[0]]; if (m && m.recipe) { var r = st.recipes.filter((x) => x.slug === m.recipe)[0]; if (r) r.ingredients.forEach((ing) => { if (items.indexOf(ing) < 0) items.push(ing); }); } });
+        slotsOf(st).forEach((sl) => { var m = (st.meals[d] || {})[sl[0]]; var rid = m && (m.recipe_id || m.recipe); if (rid && ids.indexOf(rid) < 0) ids.push(rid); });
       }
-      var have = st.shopping.map((x) => x.summary.toLowerCase());
-      if (!items.length) return this.toast("Diese Woche sind keine Rezepte aus Mealie geplant");
-      var dlg = this.dialog("🛒 Zutaten an Bring", "<p class='small muted'>Abwählen, was schon da ist. Was bereits auf der Liste steht, ist abgewählt.</p><div class='list'>" + items.map((it) => "<label class='task'><input type='checkbox' value='" + esc(it) + "'" + (have.indexOf(it.toLowerCase()) < 0 ? " checked" : "") + "><span class='nm'>" + esc(it) + "</span></label>").join("") + "</div>",
-        [["Abbrechen", "sec"], ["An Bring senden", "", () => {
-          var sel = Array.prototype.map.call(dlg.querySelectorAll("input:checked"), (x) => x.value);
-          return this.act("send_to_bring", { items: sel }).then((r) => this.toast("🛒 " + (r && r.added != null ? r.added : sel.length) + " Artikel an Bring"));
-        }]]);
+      if (!ids.length) return this.toast("Diese Woche sind keine Rezepte aus Mealie geplant");
+      this.toast("Zutaten werden geladen …");
+      this.backend.act("recipe_ingredients", { recipe_ids: ids }).then((r) => {
+        var items = (r && r.items) || [];
+        if (!items.length) return this.toast("Keine Zutaten gefunden");
+        var have = st.shopping.map((x) => x.summary.toLowerCase());
+        var dlg = this.dialog("🛒 Zutaten an Bring", "<p class='small muted'>" + ids.length + " Rezept(e). Abwählen, was schon da ist. Was bereits auf der Liste steht, ist abgewählt.</p><div class='list'>" + items.map((it, n) => "<label class='task'><input type='checkbox' data-n='" + n + "'" + (have.indexOf(it.name.toLowerCase()) < 0 ? " checked" : "") + "><span class='nm'>" + esc(it.name) + (it.spec ? " <span class='muted'>" + esc(it.spec) + "</span>" : "") + (it.recipes && it.recipes.length ? "<br><span class='small muted'>" + esc(it.recipes.join(", ")) + "</span>" : "") + "</span></label>").join("") + "</div>",
+          [["Abbrechen", "sec"], ["An Bring senden", "", () => {
+            var sel = Array.prototype.map.call(dlg.querySelectorAll("input:checked"), (x) => items[Number(x.getAttribute("data-n"))]);
+            return this.act("send_to_bring", { items: sel }).then((res) => this.toast("🛒 " + (res && res.added != null ? res.added : sel.length) + " Artikel an Bring"));
+          }]]);
+      }).catch((e) => this.toast("⚠️ " + (e && e.message || e)));
     }
 
     // ---------- Dialoge ----------

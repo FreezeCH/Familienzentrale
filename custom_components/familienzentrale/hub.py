@@ -19,6 +19,7 @@ from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
 from . import logic
+from .mealie import MealieBridge
 from .const import (
     CAL_DAYS_AHEAD,
     CAL_DAYS_BACK,
@@ -67,7 +68,7 @@ DEFAULT_DATA: dict[str, Any] = {
             "waste_time": "19:00",
             "waste_targets": ["telegram", "sonos"],
         },
-        "mealie": {"to_bring": "button", "bring_list": ""},
+        "mealie": {"to_bring": "button", "bring_list": "", "slots": ["fruehstueck", "mittag", "abend"]},
         "pin": None,  # {"salt": ..., "hash": ...}
     },
     "persons": [],
@@ -114,6 +115,7 @@ class FamilienzentraleHub:
         self.data: dict[str, Any] = copy.deepcopy(DEFAULT_DATA)
         self._listeners: list[Callable[[], None]] = []
         self._tokens: dict[str, float] = {}
+        self.mealie = MealieBridge(hass)
 
     # ---------- Laden / Speichern ----------
     async def async_load(self) -> None:
@@ -255,6 +257,13 @@ class FamilienzentraleHub:
         st["calendar_list"] = self._entities_of("calendar")
         st["ha_persons"] = self._entities_of("person")
         st["recipes"] = []
+        st["mealie"] = {"ok": False, "error": None}
+        if self.mealie.available:
+            ws = self.today() - timedelta(days=self.today().weekday())
+            meals = await self.mealie.async_meals(ws, ws + timedelta(days=13))
+            st["mealie"] = {"ok": self.mealie.error is None, "error": self.mealie.error}
+            if self.mealie.error is None:
+                st["meals"] = meals
         return st
 
     def _entities_of(self, domain: str) -> list[dict[str, Any]]:
@@ -373,17 +382,24 @@ class FamilienzentraleHub:
             if str(getattr(i.status, "value", i.status)) != "completed"
         ]
 
-    async def _async_shopping_add(self, items: list[str]) -> int:
+    async def _async_shopping_add(self, items: list[Any]) -> int:
         target = self._shopping_list()
         if not target:
             raise HomeAssistantError("Keine Einkaufsliste gewählt (Einstellungen → Mealie & Bring)")
         have = {i["summary"].strip().lower() for i in self._shopping_items()}
         added = 0
         for it in items:
-            name = str(it).strip()
+            spec = ""
+            if isinstance(it, dict):
+                name, spec = str(it.get("name") or "").strip(), str(it.get("spec") or "").strip()
+            else:
+                name = str(it).strip()
             if not name or name.lower() in have:
                 continue
-            await self.hass.services.async_call("todo", "add_item", {"item": name}, target={"entity_id": target}, blocking=True)
+            payload = {"item": name}
+            if spec:
+                payload["description"] = spec
+            await self.hass.services.async_call("todo", "add_item", payload, target={"entity_id": target}, blocking=True)
             have.add(name.lower())
             added += 1
         return added
@@ -567,15 +583,29 @@ class FamilienzentraleHub:
                 await self.hass.services.async_call("todo", "update_item", {"item": data.get("uid"), "status": "completed"}, target={"entity_id": target}, blocking=True)
 
         elif action == "send_to_bring":
-            result["added"] = await self._async_shopping_add([str(x) for x in data.get("items") or []])
+            result["added"] = await self._async_shopping_add([x if isinstance(x, dict) else str(x) for x in data.get("items") or []])
 
         elif action == "set_meal":
-            # Mealie-Anbindung folgt in Etappe 3. Bis dahin wird der Plan lokal gespeichert.
-            d["meals"].setdefault(str(data.get("date")), {})[str(data.get("slot"))] = data.get("meal")
-            self._prune_meals(today)
+            day, slot, meal = str(data.get("date")), str(data.get("slot")), data.get("meal")
+            if self.mealie.available:
+                ws = today - timedelta(days=today.weekday())
+                cur = (await self.mealie.async_meals(ws, ws + timedelta(days=13))).get(day, {}).get(slot)
+                await self.mealie.async_set_meal(day, slot, meal, cur)
+            else:
+                d["meals"].setdefault(day, {})[slot] = meal
+                self._prune_meals(today)
+            if meal and meal.get("recipe_id") and d["settings"]["mealie"].get("to_bring") == "auto" and self.mealie.available:
+                result["added"] = await self._async_shopping_add(await self.mealie.async_ingredients([meal["recipe_id"]]))
 
         elif action == "search_recipes":
-            return {"recipes": []}
+            if not self.mealie.available:
+                return {"recipes": [], "error": "Mealie ist in Home Assistant nicht eingerichtet"}
+            return {"recipes": await self.mealie.async_search(str(data.get("query") or ""))}
+
+        elif action == "recipe_ingredients":
+            if not self.mealie.available:
+                return {"items": []}
+            return {"items": await self.mealie.async_ingredients([str(x) for x in data.get("recipe_ids") or []])}
 
         elif action == "frame_photo":
             raise HomeAssistantError("Bilderrahmen folgt in Etappe 5")

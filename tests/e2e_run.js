@@ -203,12 +203,67 @@ export async function run() {
   d = await dbg();
   check("Abhaken setzt Bring-Eintrag auf erledigt", d.todo["todo.zuhause"].some((i) => i.status === "completed"));
 
-  // 10 Essen
+  // 10 Essen mit Mealie
+  const otherIso = (() => { const t = new Date(Date.now() + ((new Date().getDay() + 6) % 7 === 0 ? 1 : -1) * 86400000); return t.getFullYear() + "-" + String(t.getMonth() + 1).padStart(2, "0") + "-" + String(t.getDate()).padStart(2, "0"); })();
   await nav("essen");
-  const cell = qa(".meal")[0]; const md = cell.dataset.d, ms = cell.dataset.s; cell.click(); await w(400);
-  q("#rq").value = "Birchermüesli"; { const b = qa(".dlg [data-b]"); b[b.length - 1].click(); } await w(450);
+  check("Essen: Quelle Mealie angezeigt", txt().includes("aus Mealie"), txt().slice(0, 200));
+  const cellSel = (dd, sl) => `.meal[data-d='${dd}'][data-s='${sl}']`;
+  const pick = async (dd, sl, query, name) => {
+    q(cellSel(dd, sl)).click(); await w(500);
+    q("#rq").value = query; q("#rq").dispatchEvent(new Event("input", { bubbles: true })); await w(700);
+    const b = qa("#rl [data-rid]").find((x) => x.dataset.name === name);
+    if (!b) throw new Error("Rezept nicht in Suche: " + name + " / " + q("#rl").textContent);
+    b.click(); await w(700);
+  };
+  q(cellSel(todayIso, "abend")).click(); await w(600);
+  check("Rezeptsuche zeigt Mealie-Rezepte", qa("#rl [data-rid]").length === 3, qa("#rl [data-rid]").length);
+  q("#rq").value = "bolo"; q("#rq").dispatchEvent(new Event("input", { bubbles: true })); await w(700);
+  check("Suche filtert", qa("#rl [data-rid]").length === 1);
+  qa("#rl [data-rid]")[0].click(); await w(700);
   d = await dbg();
-  check("Essen als Freitext gespeichert", d.data.meals[md] && d.data.meals[md][ms] && d.data.meals[md][ms].name === "Birchermüesli");
+  check("Rezept in Mealie eingetragen (Abendessen)", d.mealie.length === 1 && d.mealie[0].type === "dinner" && d.mealie[0].recipe === "Spaghetti Bolognese" && d.mealie[0].date === todayIso, d.mealie);
+  check("Essensplan zeigt das Rezept", q(cellSel(todayIso, "abend")).textContent.includes("Spaghetti"));
+  await pick(todayIso, "abend", "", "Gemüsecurry");
+  d = await dbg();
+  check("Ersetzen: alter Eintrag gelöscht, neuer eingetragen", d.mealie.length === 1 && d.mealie[0].recipe === "Gemüsecurry", d.mealie);
+  await pick(otherIso, "abend", "", "Spaghetti Bolognese");
+  q(cellSel(todayIso, "mittag")).click(); await w(500); q("#rq").value = "Resten"; { const b = qa(".dlg [data-b]"); b[b.length - 1].click(); } await w(700);
+  d = await dbg();
+  check("Freitext als Mealie-Notiz", d.mealie.some((x) => x.type === "lunch" && x.title === "Resten" && !x.recipe), d.mealie);
+  q(cellSel(todayIso, "mittag")).click(); await w(500); qa(".dlg [data-b]")[0].click(); await w(700);
+  d = await dbg();
+  check("Leeren löscht in Mealie", !d.mealie.some((x) => x.type === "lunch"), d.mealie);
+  check("Startseite zeigt Essen heute", (await (async () => { await nav("start"); return txt().includes("Gemüsecurry"); })()));
+  await nav("essen");
+  await click("[data-act=weekbring]", 900);
+  const ingr = qa(".dlg .task").map((x) => x.textContent.replace(/\s+/g, " "));
+  check("Zutaten der Woche mit Mengen", ingr.some((x) => x.includes("Spaghetti") && x.includes("500 g")) && ingr.some((x) => x.includes("Zwiebel") && x.includes("1 + 2")), ingr);
+  await save(); await w(400);
+  d = await dbg();
+  const zu = d.todo["todo.zuhause"];
+  check("Zutaten in Bring mit Menge als Beschreibung", zu.some((i) => i.summary === "Spaghetti" && i.description === "500 g") && zu.some((i) => i.summary === "Salz und Pfeffer"), zu);
+  // Automatisch
+  await nav("einstellungen"); if (q("[data-act=unlock]")) { await click("[data-act=unlock]"); await pin(); }
+  await chg("select[data-chg=mealie][data-k=to_bring]", "auto");
+  await chg("[data-chg=slot][data-v=nachtisch]", true);
+  d = await dbg();
+  check("Gerichtstyp Nachtisch eingeschaltet", d.data.settings.mealie.slots.includes("nachtisch"));
+  await nav("essen");
+  check("Zeile Nachtisch sichtbar", txt().includes("Nachtisch"));
+  await pick(otherIso, "fruehstueck", "bircher", "Birchermüesli");
+  d = await dbg();
+  check("Automatisch: Zutaten sofort in Bring", d.todo["todo.zuhause"].some((i) => i.summary === "Haferflocken") && toasts().some((t) => t.includes("Zutaten an Bring")));
+  await nav("einstellungen"); await chg("select[data-chg=mealie][data-k=to_bring]", "button");
+  // Ohne Mealie: lokaler Plan
+  await fetch("/api/mealie_off", { method: "POST", body: "{}" });
+  await el.backend.load().then((s2) => { el.state = s2; el.render(); });
+  await nav("essen");
+  check("Ohne Mealie: Hinweis", txt().includes("nicht eingerichtet"));
+  q(cellSel(todayIso, "abend")).click(); await w(500);
+  check("Ohne Mealie: Hinweis in der Suche", q("#rl").textContent.includes("nicht eingerichtet"));
+  q("#rq").value = "Pizza"; { const b = qa(".dlg [data-b]"); b[b.length - 1].click(); } await w(600);
+  d = await dbg();
+  check("Ohne Mealie: Freitext lokal gespeichert", d.data.meals[todayIso] && d.data.meals[todayIso].abend && d.data.meals[todayIso].abend.name === "Pizza");
 
   // 11 Wartung
   await nav("wartung");

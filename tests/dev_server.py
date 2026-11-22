@@ -108,20 +108,88 @@ class Bus:
         self.fired.append({"event": event, "data": data})
 
 
+class FakeMealie:
+    """Kleine Mealie-Attrappe mit Rezepten und Essensplan (Antwortformat wie die HA-Integration)."""
+
+    def __init__(self):
+        def ing(q, unit, food, note=""):
+            return {"quantity": q, "unit": {"name": unit, "abbreviation": unit, "use_abbreviation": True} if unit else None,
+                    "food": {"name": food} if food else None, "note": note, "display": f"{q or ''} {unit or ''} {food or note}".strip(), "original_text": None}
+        self.recipes = {
+            "r-bolo": {"recipe_id": "r-bolo", "slug": "spaghetti-bolognese", "name": "Spaghetti Bolognese", "image": "x",
+                       "ingredients": [ing(500, "g", "Spaghetti"), ing(400, "g", "Hackfleisch"), ing(1, None, "Zwiebel"), ing(None, None, None, "Salz und Pfeffer")]},
+            "r-curry": {"recipe_id": "r-curry", "slug": "gemuesecurry", "name": "Gemüsecurry", "image": None,
+                        "ingredients": [ing(1, "Dose", "Kokosmilch"), ing(2, None, "Zwiebel"), ing(250, "g", "Reis")]},
+            "r-muesli": {"recipe_id": "r-muesli", "slug": "birchermuesli", "name": "Birchermüesli", "image": None,
+                         "ingredients": [ing(100, "g", "Haferflocken"), ing(2, None, "Äpfel")]},
+        }
+        self.plans = []
+        self._n = 0
+
+    def call(self, service, data):
+        if service == "get_recipes":
+            q = (data.get("search_terms") or "").lower()
+            items = [{k: v for k, v in r.items() if k != "ingredients"} for r in self.recipes.values() if q in r["name"].lower()]
+            return {"recipes": {"items": items[: int(data.get("result_limit") or 10)]}}
+        if service == "get_recipe":
+            rid = data["recipe_id"]
+            r = self.recipes.get(rid) or next((x for x in self.recipes.values() if x["slug"] == rid), None)
+            if not r:
+                raise HomeAssistantError("Rezept nicht gefunden")
+            return {"recipe": r}
+        if service == "get_mealplan":
+            a, b = date.fromisoformat(str(data["start_date"])), date.fromisoformat(str(data["end_date"]))
+            return {"mealplan": [p for p in self.plans if a <= p["mealplan_date"] <= b]}
+        if service == "set_mealplan":
+            self._n += 1
+            rec = self.recipes.get(data.get("recipe_id")) if data.get("recipe_id") else None
+            if data.get("recipe_id") and not rec:
+                raise HomeAssistantError("recipe_id muss eine Rezept-ID sein")
+            self.plans.append({"mealplan_id": self._n, "entry_type": _Status(data["entry_type"]), "mealplan_date": date.fromisoformat(str(data["date"])),
+                               "title": data.get("note_title") or "", "description": data.get("note_text") or "",
+                               "recipe": {k: v for k, v in rec.items() if k != "ingredients"} if rec else None})
+            return None
+        if service == "delete_mealplan":
+            self.plans = [p for p in self.plans if p["mealplan_id"] != int(data["mealplan_id"])]
+            return None
+        raise HomeAssistantError(f"Unbekannte Aktion mealie.{service}")
+
+
+class _Entry:
+    def __init__(self, entry_id, data):
+        self.entry_id, self.data, self.state = entry_id, data, _Status("loaded")
+
+
+class ConfigEntries:
+    def __init__(self):
+        self.entries = {"mealie": [_Entry("mealie1", {"host": "http://mealie.test"})]}
+
+    def async_entries(self, domain):
+        return self.entries.get(domain, [])
+
+
 class Services:
     def __init__(self, hass):
         self.hass = hass
         self.calls = []
 
-    async def async_call(self, domain, service, data=None, target=None, blocking=False):
+    def has_service(self, domain, service):
+        return domain != "mealie" or bool(self.hass.config_entries.entries.get("mealie"))
+
+    async def async_call(self, domain, service, data=None, target=None, blocking=False, return_response=False):
         data = data or {}
         eid = (target or {}).get("entity_id")
         self.calls.append({"service": f"{domain}.{service}", "data": data, "target": eid})
+        if domain == "mealie":
+            if data.get("config_entry_id") != "mealie1":
+                raise HomeAssistantError("config_entry_id fehlt oder falsch")
+            return self.hass.mealie.call(service, data)
         ent = self.hass.data[domain].get_entity(eid)
         if ent is None:
             raise HomeAssistantError(f"Entität {eid} nicht gefunden")
         if (domain, service) == ("todo", "add_item"):
             ent.add(data["item"])
+            ent.todo_items[-1].description = data.get("description")
         elif (domain, service) == ("todo", "update_item"):
             for i in ent.todo_items:
                 if i.uid == data["item"] or i.summary == data["item"]:
@@ -150,6 +218,8 @@ class FakeHass:
         self.platforms: dict[str, str] = {}
         self.bus = Bus()
         self.services = Services(self)
+        self.config_entries = ConfigEntries()
+        self.mealie = FakeMealie()
 
     async def async_add_executor_job(self, func, *args):
         return func(*args)
@@ -195,8 +265,9 @@ def run(coro):
 
 def debug():
     cal = {k: [{"uid": e.uid, "summary": e.summary, "start": str(e.start), "description": e.description} for e in v.events] for k, v in HASS.data["calendar"].entities.items()}
-    todo = {k: [{"uid": i.uid, "summary": i.summary, "status": i.status.value} for i in v.todo_items] for k, v in HASS.data["todo"].entities.items()}
-    return {"data": HUB.data, "calendars": cal, "todo": todo, "events": HASS.bus.fired, "service_calls": HASS.services.calls, "stored": fake_storage._MEM}
+    todo = {k: [{"uid": i.uid, "summary": i.summary, "status": i.status.value, "description": getattr(i, "description", None)} for i in v.todo_items] for k, v in HASS.data["todo"].entities.items()}
+    plans = [{"id": p["mealplan_id"], "type": p["entry_type"].value, "date": str(p["mealplan_date"]), "title": p["title"], "recipe": (p["recipe"] or {}).get("name")} for p in HASS.mealie.plans]
+    return {"mealie": plans, "data": HUB.data, "calendars": cal, "todo": todo, "events": HASS.bus.fired, "service_calls": HASS.services.calls, "stored": fake_storage._MEM}
 
 
 class Handler(SimpleHTTPRequestHandler):
@@ -227,6 +298,9 @@ class Handler(SimpleHTTPRequestHandler):
             fake_storage._MEM.clear()
             HASS, HUB = build()
             run(HUB.async_load())
+            return self._json(200, {"ok": True})
+        if self.path == "/api/mealie_off":
+            HASS.config_entries.entries["mealie"] = []
             return self._json(200, {"ok": True})
         if self.path == "/api/reload":
             # wie ein HA-Neustart: gespeicherte Daten neu laden
