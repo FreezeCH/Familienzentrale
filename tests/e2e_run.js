@@ -237,11 +237,34 @@ export async function run() {
   await nav("essen");
   await click("[data-act=weekbring]", 900);
   const ingr = qa(".dlg .task").map((x) => x.textContent.replace(/\s+/g, " "));
-  check("Zutaten der Woche mit Mengen", ingr.some((x) => x.includes("Spaghetti") && x.includes("500 g")) && ingr.some((x) => x.includes("Zwiebel") && x.includes("1 + 2")), ingr);
+  check("Zutaten der Woche mit Mengen", ingr.some((x) => x.includes("Spaghetti") && x.includes("500 g")) && ingr.some((x) => x.includes("Zwiebel") && /Zwiebel\s*3(?!\d)/.test(x)), ingr);
   await save(); await w(400);
   d = await dbg();
   const zu = d.todo["todo.zuhause"];
   check("Zutaten in Bring mit Menge als Beschreibung", zu.some((i) => i.summary === "Spaghetti" && i.description === "500 g") && zu.some((i) => i.summary === "Salz und Pfeffer"), zu);
+  // Personenzahl: Bolognese (Rezept für 4) für 6 Personen
+  q(cellSel(otherIso, "abend")).click(); await w(500);
+  check("Essens-Dialog zeigt Personenzahl", q("#svn") && q("#svn").textContent === "4");
+  q(".dlg [data-sv='1']").click(); q(".dlg [data-sv='1']").click(); await w(50);
+  { const b = qa(".dlg [data-b]"); b[b.length - 1].click(); } await w(700);
+  d = await dbg();
+  check("Personenzahl gespeichert", d.data.meal_servings[otherIso + "|abend"] === 6, d.data.meal_servings);
+  check("Zelle zeigt 👥6", q(cellSel(otherIso, "abend")).textContent.includes("👥6"));
+  const six = await el.backend.act("recipe_ingredients", { entries: [{ recipe_id: "r-bolo", servings: 6 }] });
+  check("Mengen hochgerechnet (6 statt 4 Personen)", (six.items || []).some((i) => i.name === "Spaghetti" && i.spec === "750 g") && six.items.some((i) => i.name === "Hackfleisch" && i.spec === "600 g") && six.items.some((i) => i.name === "Zwiebel" && i.spec === "1,5"), six.items);
+  await nav("einstellungen"); if (q("[data-act=unlock]")) { await click("[data-act=unlock]"); await pin(); }
+  await chg("input[data-chg=servings]", "2");
+  d = await dbg();
+  check("Standard-Personenzahl einstellbar", d.data.settings.mealie.servings === 2);
+  const two = await el.backend.act("recipe_ingredients", { recipe_ids: ["r-bolo"] });
+  check("Standard 2 Personen: halbe Menge", (two.items || []).some((i) => i.name === "Spaghetti" && i.spec === "250 g"), two.items);
+  await chg("input[data-chg=servings]", "4");
+  await nav("essen");
+
+  // Gleiches Rezept zweimal geplant: Mengen doppelt
+  const twice = await el.backend.act("recipe_ingredients", { recipe_ids: ["r-curry", "r-curry"] });
+  check("Zweimal geplant: doppelte Menge", (twice.items || []).some((i) => i.name === "Reis" && i.spec === "500 g"), twice.items);
+
   // Freitext-Zutaten, Grundzutaten, kein Doppel bei mehrfachem Senden
   const fx = await el.backend.act("recipe_ingredients", { recipe_ids: ["r-voressen"] });
   const fxn = (fx.items || []).map((i) => i.name + "|" + i.spec);

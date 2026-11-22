@@ -15,7 +15,7 @@ from typing import Any
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 
-from .ingredients import ingredient_line, norm
+from .ingredients import combine_specs, ingredient_line, norm, servings_factor
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -172,30 +172,34 @@ class MealieBridge:
                 return r.get("recipe_id") or r.get("slug")
         return None
 
-    async def async_ingredients(self, recipe_ids: list[str]) -> list[dict[str, str]]:
-        """Zutaten mehrerer Rezepte, gleiche Lebensmittel zusammengefasst."""
+    async def async_ingredients(self, recipe_ids: list[Any], default_servings: Any = 0) -> list[dict[str, str]]:
+        """Zutaten mehrerer Rezepte. Kommt ein Rezept mehrmals vor (zweimal geplant), zählt es mehrmals.
+        Gleiche Lebensmittel werden zusammengefasst und ihre Mengen addiert."""
+        cache: dict[str, dict] = {}
         merged: dict[str, dict[str, Any]] = {}
-        for rid in recipe_ids:
+        for entry_in in recipe_ids:
+            # Eintrag: Rezept-ID oder (Rezept-ID, Personen)
+            rid, servings = (entry_in if isinstance(entry_in, (list, tuple)) else (entry_in, None))
             if not rid:
                 continue
-            try:
-                res = await self._call("get_recipe", {"recipe_id": rid})
-            except Exception as err:  # noqa: BLE001
-                _LOGGER.warning("Rezept %s nicht lesbar: %s", rid, err)
-                continue
-            recipe = (res or {}).get("recipe") or {}
+            if rid not in cache:
+                try:
+                    res = await self._call("get_recipe", {"recipe_id": rid})
+                    cache[rid] = (res or {}).get("recipe") or {}
+                except Exception as err:  # noqa: BLE001
+                    _LOGGER.warning("Rezept %s nicht lesbar: %s", rid, err)
+                    cache[rid] = {}
+            recipe = cache[rid]
+            factor = servings_factor(servings or default_servings, recipe)
             for ing in recipe.get("ingredients") or []:
-                line = ingredient_line(ing)
+                line = ingredient_line(ing, factor)
                 if not line["name"]:
                     continue
                 key = norm(line["name"])
-                if key in merged:
-                    if line["spec"] and line["spec"] not in merged[key]["specs"]:
-                        merged[key]["specs"].append(line["spec"])
-                    merged[key]["recipes"].add(recipe.get("name"))
-                else:
-                    merged[key] = {"name": line["name"], "specs": [line["spec"]] if line["spec"] else [], "recipes": {recipe.get("name")}}
+                entry = merged.setdefault(key, {"name": line["name"], "specs": [], "recipes": set()})
+                entry["specs"].append(line["spec"])
+                entry["recipes"].add(recipe.get("name"))
         return [
-            {"name": m["name"], "spec": " + ".join(m["specs"]), "recipes": sorted(x for x in m["recipes"] if x)}
+            {"name": m["name"], "spec": combine_specs(m["specs"]), "recipes": sorted(x for x in m["recipes"] if x)}
             for m in merged.values()
         ]

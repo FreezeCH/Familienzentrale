@@ -8,7 +8,7 @@
  */
 (function () {
   "use strict";
-  var PANEL_VERSION = "0.4.2"; // muss zu const.py VERSION passen
+  var PANEL_VERSION = "0.4.4"; // muss zu const.py VERSION passen
 
   // ---------- Hilfsfunktionen ----------
   var pad = function (n) { return String(n).padStart(2, "0"); };
@@ -326,7 +326,15 @@
         var q = String(data.query || "").toLowerCase();
         return Promise.resolve({ recipes: st.recipes.filter(function (r) { return !q || r.name.toLowerCase().indexOf(q) >= 0; }).map(function (r) { return { slug: r.slug, name: r.name, recipe_id: r.slug }; }) });
       }
+      case "set_servings":
+        st.meal_servings = st.meal_servings || {};
+        if (Number(data.servings) > 0) st.meal_servings[data.date + "|" + data.slot] = Number(data.servings); else delete st.meal_servings[data.date + "|" + data.slot];
+        Object.keys(st.meal_servings).forEach(function (k) { var p2 = k.split("|"); if (st.meals[p2[0]] && st.meals[p2[0]][p2[1]]) st.meals[p2[0]][p2[1]].servings = st.meal_servings[k]; });
+        break;
+      case "noop":
+        break;
       case "recipe_ingredients": {
+        (data.entries || []).forEach(function (e) { if (e.recipe_id) data.recipe_ids = (data.recipe_ids || []).concat([e.recipe_id]); else if (e.name) data.names = (data.names || []).concat([e.name]); });
         var out = [];
         (data.names || []).forEach(function (n) { var rr = st.recipes.filter(function (x) { return x.name.toLowerCase() === String(n).toLowerCase(); })[0]; if (rr) data.recipe_ids = (data.recipe_ids || []).concat([rr.slug]); });
         (data.recipe_ids || []).forEach(function (rid) { recipeIngredients(st, rid).forEach(function (n) { if (!out.some(function (o) { return o.name === n; })) out.push({ name: n, spec: "" }); }); });
@@ -873,7 +881,7 @@ label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--mu
         html += "<div class='sl'>" + sl[1] + "</div>";
         for (var j = 0; j < 7; j++) {
           var dd = iso(addDays(ws, j)), m = (st.meals[dd] || {})[sl[0]];
-          html += "<button class='meal " + (m ? "set" : "") + "' data-act='meal' data-d='" + dd + "' data-s='" + sl[0] + "'>" + (m ? (m.image ? "<img src='" + esc(m.image) + "' alt='' loading='lazy' onerror='this.remove()'>" : "") + esc(m.name) + (m.recipe ? " <span class='muted'>📖</span>" : "") + (m.more ? " <span class='muted'>+" + m.more + "</span>" : "") : "<span class='muted'>＋</span>") + "</button>";
+          html += "<button class='meal " + (m ? "set" : "") + "' data-act='meal' data-d='" + dd + "' data-s='" + sl[0] + "'>" + (m ? (m.image ? "<img src='" + esc(m.image) + "' alt='' loading='lazy' onerror='this.remove()'>" : "") + esc(m.name) + (m.recipe ? " <span class='muted'>📖</span>" : "") + (m.more ? " <span class='muted'>+" + m.more + "</span>" : "") + (m.servings && m.servings !== this._defServings() ? " <span class='muted'>👥" + m.servings + "</span>" : "") : "<span class='muted'>＋</span>") + "</button>";
         }
       });
       return html + "</div></div>";
@@ -925,7 +933,7 @@ label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--mu
         "<label class='f'>Farbschema<select data-chg='set' data-k='theme'><option value='hell'" + (s.theme === "hell" ? " selected" : "") + ">Hell</option><option value='dunkel'" + (s.theme === "dunkel" ? " selected" : "") + ">Dunkel</option></select></label>" +
         "<label class='row'><input type='checkbox' data-chg='setbool' data-k='lock_calendar' " + (s.lock_calendar ? "checked" : "") + "> Termine anlegen/löschen nur mit PIN</label>" +
         "<button class='btn sec' data-act='newpin'>🔑 PIN ändern</button></div></div>" +
-        "<div class='card set-sec'><h3>🍽️ Mealie & Bring</h3><div class='form'><label class='f'>Zutaten an Bring<select data-chg='mealie' data-k='to_bring'>" + [["auto", "automatisch beim Eintragen"], ["button", "auf Knopfdruck (mit Auswahl)"], ["never", "nie"]].map((o) => "<option value='" + o[0] + "'" + (s.mealie.to_bring === o[0] ? " selected" : "") + ">" + o[1] + "</option>").join("") + "</select></label><label class='f'>Einkaufsliste für Zutaten und Einkauf<select data-chg='mealie' data-k='bring_list'><option value=''>– bitte wählen –</option>" + this._todoLists().map((o) => "<option value='" + esc(o.entity_id) + "'" + (s.mealie.bring_list === o.entity_id ? " selected" : "") + ">" + esc(o.name) + (o.platform === "bring" ? " · Bring" : "") + "</option>").join("") + "</select></label><label class='f'>Grundzutaten, die nie vorausgewählt sind (kommagetrennt)<input data-chg='skiplist' value='" + esc(((s.mealie || {}).skip || []).join(", ")) + "'></label><div class='f'><span class='small muted'><b>Zeilen im Essensplan</b></span><div class='grid' style='grid-template-columns:repeat(auto-fill,minmax(130px,1fr))'>" + ALL_SLOTS.map((x) => "<label class='row'><input type='checkbox' data-chg='slot' data-v='" + x[0] + "'" + (slotsOf(st).some((y) => y[0] === x[0]) ? " checked" : "") + ">" + x[1] + "</label>").join("") + "</div></div></div></div>" +
+        "<div class='card set-sec'><h3>🍽️ Mealie & Bring</h3><div class='form'><label class='f'>Zutaten an Bring<select data-chg='mealie' data-k='to_bring'>" + [["auto", "automatisch beim Eintragen"], ["button", "auf Knopfdruck (mit Auswahl)"], ["never", "nie"]].map((o) => "<option value='" + o[0] + "'" + (s.mealie.to_bring === o[0] ? " selected" : "") + ">" + o[1] + "</option>").join("") + "</select></label><label class='f'>Einkaufsliste für Zutaten und Einkauf<select data-chg='mealie' data-k='bring_list'><option value=''>– bitte wählen –</option>" + this._todoLists().map((o) => "<option value='" + esc(o.entity_id) + "'" + (s.mealie.bring_list === o.entity_id ? " selected" : "") + ">" + esc(o.name) + (o.platform === "bring" ? " · Bring" : "") + "</option>").join("") + "</select></label><label class='f'>Standard: für wie viele Personen wird gekocht<input type='number' min='1' max='30' data-chg='servings' value='" + esc(this._defServings()) + "'></label><label class='f'>Grundzutaten, die nie vorausgewählt sind (kommagetrennt)<input data-chg='skiplist' value='" + esc(((s.mealie || {}).skip || []).join(", ")) + "'></label><div class='f'><span class='small muted'><b>Zeilen im Essensplan</b></span><div class='grid' style='grid-template-columns:repeat(auto-fill,minmax(130px,1fr))'>" + ALL_SLOTS.map((x) => "<label class='row'><input type='checkbox' data-chg='slot' data-v='" + x[0] + "'" + (slotsOf(st).some((y) => y[0] === x[0]) ? " checked" : "") + ">" + x[1] + "</label>").join("") + "</div></div></div></div>" +
         "<div class='card set-sec'><h3>🔔 Benachrichtigungen</h3><div class='form'><label class='f'>Telegram (Notify-Aktion)<input data-chg='notify' data-k='telegram' placeholder='notify.telegram_familie' value='" + esc(s.notify.telegram) + "'></label><label class='f'>Sonos-Lautsprecher (kommagetrennt)<input data-chg='notifylist' data-k='sonos' placeholder='media_player.sonos_kuche' value='" + esc((s.notify.sonos || []).join(", ")) + "'></label>" +
         "<div class='row'><label class='f' style='flex:1'>Ruhezeit von<input type='time' data-chg='notify' data-k='quiet_from' value='" + esc(s.notify.quiet_from) + "'></label><label class='f' style='flex:1'>bis<input type='time' data-chg='notify' data-k='quiet_to' value='" + esc(s.notify.quiet_to) + "'></label></div>" +
         "<label class='f'>Müll-Erinnerung am Vorabend um<input type='time' data-chg='notify' data-k='waste_time' value='" + esc(s.notify.waste_time) + "'></label></div></div>" +
@@ -957,9 +965,9 @@ label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--mu
         case "tasktab": this.sub.task = v; this.render(); break;
         case "mealweek": this.sub.mealWeek = Number(v); this.render(); break;
         case "pp": this.sub.pp = v; this.render(); break;
-        case "done": this._complete(id, el.getAttribute("data-p")); break;
-        case "undo": this._keepScroll = true; this.act("undo_task", { task: id, person: el.getAttribute("data-p") }); break;
-        case "rstep": this._routineStep(el.getAttribute("data-r"), el.getAttribute("data-p"), el.getAttribute("data-s"), el.classList.contains("done") || el.classList.contains("on")); break;
+        case "done": if (el.getAttribute("data-p")) { el.classList.add("on"); el.textContent = "✓"; } this._complete(id, el.getAttribute("data-p")); break;
+        case "undo": el.classList.remove("on"); el.textContent = ""; this._keepScroll = true; this.act("undo_task", { task: id, person: el.getAttribute("data-p") }); break;
+        case "rstep": { var wasDone = el.classList.contains("done") || el.classList.contains("on"); el.classList.toggle(el.classList.contains("chk") ? "on" : "done", !wasDone); this._routineStep(el.getAttribute("data-r"), el.getAttribute("data-p"), el.getAttribute("data-s"), wasDone); break; }
         case "calfilter": { var hh = this._calHidden(); hh[v] = !hh[v]; try { localStorage.setItem("fz_cal_hidden", JSON.stringify(hh)); } catch (e2) { /* egal */ } this.render(); break; }
         case "redeem": this._redeem(id, el.getAttribute("data-p")); break;
         case "approve": this.pin(() => this.act("approve", { id: id }).then(() => this.toast("✓ Bestätigt"))); break;
@@ -982,6 +990,7 @@ label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--mu
         case "demoreset": if (confirm("Alle Demodaten zurücksetzen?")) { this.backend.reset(); this.useDemo(window.FAMILIENZENTRALE_DEMO); } break;
       }
     }
+    _defServings() { var m = (this.state && this.state.settings.mealie) || {}; return Number(m.servings) || 4; }
     _shopAdd() {
       var inp = this.shadowRoot.getElementById("shopin");
       var v = inp ? inp.value.trim() : "";
@@ -1004,6 +1013,7 @@ label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--mu
         case "setbool": save(k, el.checked); break;
         case "mealie": save("mealie", Object.assign({}, s.mealie, { [k]: el.value })); break;
         case "notify": save("notify", Object.assign({}, s.notify, { [k]: el.value })); break;
+        case "servings": save("mealie", Object.assign({}, s.mealie, { servings: Math.max(1, Math.min(30, Number(el.value) || 4)) })); break;
         case "skiplist": save("mealie", Object.assign({}, s.mealie, { skip: el.value.split(",").map((x) => x.trim()).filter(Boolean) })); break;
         case "slot": { var on = slotsOf(this.state).map((x) => x[0]).filter((x) => x !== el.getAttribute("data-v")); if (el.checked) on.push(el.getAttribute("data-v")); on = ALL_SLOTS.map((x) => x[0]).filter((x) => on.indexOf(x) >= 0); if (!on.length) { el.checked = true; break; } save("mealie", Object.assign({}, s.mealie, { slots: on })); break; }
         case "notifylist": save("notify", Object.assign({}, s.notify, { [k]: el.value.split(",").map((x) => x.trim()).filter(Boolean) })); break;
@@ -1245,9 +1255,12 @@ label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--mu
     _mealDlg(date, slot) {
       var cur = (this.state.meals[date] || {})[slot];
       var dlg = this.dialog("🍽️ " + fmtDate(date) + " · " + (ALL_SLOTS.filter((s) => s[0] === slot)[0] || ["", slot])[1],
-        "<div class='form'><input id='rq' placeholder='Rezept in Mealie suchen oder frei eintippen' value='" + esc(cur ? cur.name : "") + "'><div id='rl' class='list'><div class='empty'>Suche …</div></div></div>",
-        [["🗑️ Leeren", "bad", () => this.act("set_meal", { date: date, slot: slot, meal: null })], ["Abbrechen", "sec"], ["✓ Übernehmen (Freitext)", "", () => { var q = dlg.querySelector("#rq").value.trim(); return this.act("set_meal", { date: date, slot: slot, meal: q ? { name: q } : null }); }]]);
+        "<div class='form'><div class='row'><span>👥 Für</span><button type='button' class='btn sec sm' data-sv='-1'>−</button><b id='svn' style='min-width:28px;text-align:center'>" + (cur && cur.servings || this._defServings()) + "</b><button type='button' class='btn sec sm' data-sv='1'>＋</button><span>Personen</span><span class='small muted'>(Mengen werden hochgerechnet)</span></div><input id='rq' placeholder='Rezept in Mealie suchen oder frei eintippen' value='" + esc(cur ? cur.name : "") + "'><div id='rl' class='list'><div class='empty'>Suche …</div></div></div>",
+        [["🗑️ Leeren", "bad", () => this.act("set_meal", { date: date, slot: slot, meal: null })], ["Abbrechen", "sec"], ["✓ Übernehmen", "", () => { var qv = dlg.querySelector("#rq").value.trim(); if (cur && qv === cur.name) return saveSv().then(() => this.act("noop", {})); return saveSv().then(() => this.act("set_meal", { date: date, slot: slot, meal: qv ? { name: qv } : null })); }]]);
       var q = dlg.querySelector("#rq"), rl = dlg.querySelector("#rl"), timer;
+      var sv = Number(cur && cur.servings || this._defServings());
+      var saveSv = () => { var n = sv === this._defServings() ? 0 : sv; return this.backend.act("set_servings", { date: date, slot: slot, servings: n }); };
+      dlg.addEventListener("click", (e) => { var b = e.target.closest("[data-sv]"); if (!b) return; sv = Math.max(1, Math.min(30, sv + Number(b.getAttribute("data-sv")))); dlg.querySelector("#svn").textContent = sv; });
       var search = () => this.backend.act("search_recipes", { query: q.value === (cur && cur.name) ? "" : q.value }).then((r) => {
         if (r.error) { rl.innerHTML = "<div class='empty'>" + esc(r.error) + " – mit „Übernehmen“ als Freitext eintragen.</div>"; return; }
         rl.innerHTML = (r.recipes || []).slice(0, 24).map((x) => "<button class='task' style='border:0;text-align:left' data-slug='" + esc(x.slug || "") + "' data-rid='" + esc(x.recipe_id || x.slug || "") + "' data-img='" + esc(x.image || "") + "' data-name='" + esc(x.name) + "'>" + (x.image ? "<img class='rimg' src='" + esc(x.image) + "' alt='' loading='lazy' onerror='this.replaceWith(document.createTextNode(\"📖\"))'>" : "<span class='ic'>📖</span>") + "<span class='nm'>" + esc(x.name) + "</span></button>").join("") || "<div class='empty'>Kein Rezept gefunden – mit „Übernehmen“ als Freitext eintragen.</div>";
@@ -1256,7 +1269,7 @@ label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--mu
       rl.addEventListener("click", (e) => {
         var b = e.target.closest("[data-slug]"); if (!b) return;
         this.closeDialog();
-        this.act("set_meal", { date: date, slot: slot, meal: { name: b.getAttribute("data-name"), recipe: b.getAttribute("data-slug"), recipe_id: b.getAttribute("data-rid") } }).then((r) => {
+        saveSv().then(() => this.act("set_meal", { date: date, slot: slot, meal: { name: b.getAttribute("data-name"), recipe: b.getAttribute("data-slug"), recipe_id: b.getAttribute("data-rid") } })).then((r) => {
           if (r && r.added != null) this.toast("🛒 " + r.added + " Zutaten an Bring geschickt");
         });
       });
@@ -1269,13 +1282,13 @@ label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--mu
         slotsOf(st).forEach((sl) => {
           var m = (st.meals[d] || {})[sl[0]]; if (!m) return;
           var rid = m.recipe_id || m.recipe;
-          if (rid) { if (ids.indexOf(rid) < 0) ids.push(rid); }
-          else if (m.name && names.indexOf(m.name) < 0) names.push(m.name);
+          // jedes geplante Essen zählt, auch wenn dasselbe Rezept zweimal vorkommt
+          if (rid || m.name) ids.push({ recipe_id: rid || null, name: rid ? null : m.name, servings: m.servings || this._defServings() });
         });
       }
-      if (!ids.length && !names.length) return this.toast("In der angezeigten Woche ist noch nichts geplant");
+      if (!ids.length) return this.toast("In der angezeigten Woche ist noch nichts geplant");
       this.toast("Zutaten werden geladen …");
-      this.backend.act("recipe_ingredients", { recipe_ids: ids, names: names }).then((r) => {
+      this.backend.act("recipe_ingredients", { entries: ids }).then((r) => {
         var items = (r && r.items) || [];
         if (!items.length) return this.toast("Keine Zutaten gefunden – sind die Gerichte als Rezepte in Mealie geplant?");
         var norm = (x) => String(x || "").toLowerCase().split(/\s+/).filter(Boolean).join(" ");

@@ -63,6 +63,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     @callback
     def _tick(now) -> None:
+        hub.invalidate_events()
         hub.async_notify()
 
     # Kurz nach Mitternacht: neue Tagesaufgaben; alle 5 Minuten: Termine auffrischen

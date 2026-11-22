@@ -70,7 +70,7 @@ DEFAULT_DATA: dict[str, Any] = {
             "waste_time": "19:00",
             "waste_targets": ["telegram", "sonos"],
         },
-        "mealie": {"to_bring": "button", "bring_list": "", "slots": ["fruehstueck", "mittag", "abend"], "skip": ["Salz", "Pfeffer", "Salz, Pfeffer", "Wasser"]},
+        "mealie": {"to_bring": "button", "bring_list": "", "slots": ["fruehstueck", "mittag", "abend"], "skip": ["Salz", "Pfeffer", "Salz, Pfeffer", "Wasser"], "servings": 4},
         "pin": None,  # {"salt": ..., "hash": ...}
     },
     "persons": [],
@@ -83,6 +83,7 @@ DEFAULT_DATA: dict[str, Any] = {
     "maintenance": [],
     "waste": [],
     "meals": {},
+    "meal_servings": {},
 }
 
 # Aktionen, die nur mit gültiger Entsperrung (Eltern-PIN) erlaubt sind
@@ -91,6 +92,7 @@ PROTECTED = {"approve", "reject", "adjust_points", "save_item", "delete_item"}
 FREE_SETTINGS = {"theme"}
 
 MAX_HISTORY = 200
+EVENTS_CACHE_SECONDS = 300
 PERSON_TAG = "[fz:"
 MAX_LEDGER = 2000
 
@@ -121,6 +123,8 @@ class FamilienzentraleHub:
         # Kürzlich an die Einkaufsliste geschickte Artikel. Bring meldet neue Einträge
         # erst mit Verzögerung zurück; so entstehen bei mehrfachem Senden keine Doppel.
         self._recent_added: dict[str, float] = {}
+        # Termine zwischenspeichern: Kalender (z. B. Google) nicht bei jeder Aktion neu abfragen
+        self._events_cache: dict[str, Any] = {"ts": 0.0, "data": []}
 
     # ---------- Laden / Speichern ----------
     async def async_load(self) -> None:
@@ -256,7 +260,9 @@ class FamilienzentraleHub:
         st = copy.deepcopy(self.data)
         st["settings"]["pin_set"] = self.pin_set
         st["settings"].pop("pin", None)
-        st["events"] = await self._async_events()
+        if time.monotonic() - self._events_cache["ts"] > EVENTS_CACHE_SECONDS:
+            self._events_cache = {"ts": time.monotonic(), "data": await self._async_events()}
+        st["events"] = self._events_cache["data"]
         st["shopping"] = self._shopping_items()
         st["todo_lists"] = self._entities_of("todo")
         st["calendar_list"] = self._entities_of("calendar")
@@ -269,7 +275,13 @@ class FamilienzentraleHub:
             meals = await self.mealie.async_meals(ws, ws + timedelta(days=13))
             st["mealie"] = {"ok": self.mealie.error is None, "error": self.mealie.error}
             if self.mealie.error is None:
-                st["meals"] = meals
+                st["meals"] = copy.deepcopy(meals)
+        # Personenzahl je Gericht ergänzen
+        for key, n in (self.data.get("meal_servings") or {}).items():
+            day, _, slot = key.partition("|")
+            meal = (st["meals"].get(day) or {}).get(slot)
+            if meal:
+                meal["servings"] = n
         return st
 
     def _entities_of(self, domain: str) -> list[dict[str, Any]]:
@@ -532,6 +544,8 @@ class FamilienzentraleHub:
 
         elif action == "save_item":
             col = data.get("collection")
+            if col == "persons":
+                self.invalidate_events()
             item = data.get("item")
             if col not in COLLECTIONS or not isinstance(item, dict):
                 raise HomeAssistantError("Ungültige Daten")
@@ -552,6 +566,8 @@ class FamilienzentraleHub:
             d[col] = [x for x in d[col] if x.get("id") != data.get("id")]
 
         elif action == "save_settings":
+            if "family_calendar" in data:
+                self.invalidate_events()
             for key, val in data.items():
                 if key == "new_pin":
                     pin = str(val or "")
@@ -579,9 +595,11 @@ class FamilienzentraleHub:
 
         elif action == "add_event":
             await self._async_add_event(data)
+            self.invalidate_events()
 
         elif action == "delete_event":
             await self._async_delete_event(str(data.get("id", "")))
+            self.invalidate_events()
 
         elif action == "shopping_add":
             result["added"] = await self._async_shopping_add([str(data.get("summary", ""))])
@@ -609,8 +627,22 @@ class FamilienzentraleHub:
             else:
                 d["meals"].setdefault(day, {})[slot] = meal
                 self._prune_meals(today)
+            if not meal:
+                d.setdefault("meal_servings", {}).pop(f"{day}|{slot}", None)
             if meal and meal.get("recipe_id") and d["settings"]["mealie"].get("to_bring") == "auto" and self.mealie.available:
-                result["added"] = await self._async_shopping_add(await self.mealie.async_ingredients([meal["recipe_id"]]))
+                n = (d.get("meal_servings") or {}).get(f"{day}|{slot}") or d["settings"]["mealie"].get("servings")
+                result["added"] = await self._async_shopping_add(await self.mealie.async_ingredients([(meal["recipe_id"], n)]))
+
+        elif action == "noop":
+            pass
+
+        elif action == "set_servings":
+            key = f"{data.get('date')}|{data.get('slot')}"
+            n = int(data.get("servings") or 0)
+            if n > 0:
+                d.setdefault("meal_servings", {})[key] = min(n, 50)
+            else:
+                d.setdefault("meal_servings", {}).pop(key, None)
 
         elif action == "search_recipes":
             if not self.mealie.available:
@@ -620,13 +652,17 @@ class FamilienzentraleHub:
         elif action == "recipe_ingredients":
             if not self.mealie.available:
                 return {"items": []}
-            ids = [str(x) for x in data.get("recipe_ids") or []]
+            ids: list[Any] = [str(x) for x in data.get("recipe_ids") or []]
             for name in data.get("names") or []:
                 # Notiz mit dem Namen eines Rezepts: dieses Rezept verwenden
                 rid = await self.mealie.async_find_by_name(str(name))
-                if rid and rid not in ids:
+                if rid:
                     ids.append(rid)
-            return {"items": await self.mealie.async_ingredients(ids)}
+            for e in data.get("entries") or []:
+                rid = e.get("recipe_id") or (await self.mealie.async_find_by_name(str(e.get("name") or "")) if e.get("name") else None)
+                if rid:
+                    ids.append((str(rid), e.get("servings")))
+            return {"items": await self.mealie.async_ingredients(ids, d["settings"]["mealie"].get("servings"))}
 
         elif action == "frame_photo":
             raise HomeAssistantError("Bilderrahmen folgt in Etappe 5")
@@ -636,6 +672,10 @@ class FamilienzentraleHub:
 
         self._changed()
         return result
+
+    @callback
+    def invalidate_events(self) -> None:
+        self._events_cache["ts"] = 0.0
 
     def _prune_meals(self, today: date) -> None:
         limit = (today - timedelta(days=30)).isoformat()

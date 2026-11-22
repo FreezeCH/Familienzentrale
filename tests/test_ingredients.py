@@ -57,6 +57,42 @@ def test_ingredient_line():
     assert d == {"name": "Rindsvoressen", "spec": "250 g"}, d
 
 
+def test_combine_specs():
+    c = ing.combine_specs
+    assert c(["1,5 dl", "1,5 dl"]) == "3 dl"
+    assert c(["1, fein gehackt", "1, fein gehackt"]) == "2, fein gehackt"
+    assert c(["120 g, weich", "50 g, zum Dämpfen"]) == "170 g, weich, zum Dämpfen"
+    assert c(["3 EL", "3 EL"]) == "6 EL"
+    assert c(["½ TL", "1 TL"]) == "1,5 TL"
+    assert c(["1 Bund, fein geschnitten", "zum Garnieren"]) == "1 Bund, fein geschnitten + zum Garnieren"
+    assert c(["1 - 2, geschält", "1 - 2, geschält"]) == "2× 1 - 2, geschält"
+    assert c(["500 g", "1 kg"]) == "500 g + 1 kg"
+    assert c(["", "2"]) == "2"
+    assert c([]) == ""
+
+
+def test_scaling():
+    sc = ing.scale_spec
+    assert sc("150 g, weich", 2) == "300 g, weich"
+    assert sc("1 Bund, fein geschnitten", 1.5) == "1,5 Bund, fein geschnitten"
+    assert sc("1, fein gehackt", 1.5) == "1,5, fein gehackt"
+    assert sc("1 - 2, geschält", 2) == "2 - 4, geschält"
+    assert sc("3 EL", 0.5) == "1,5 EL"
+    assert sc("4 dl, kalt", 1.25) == "5 dl, kalt"
+    assert sc("8", 1.5) == "12"
+    assert sc("1", 0.75) == "1"            # Stück: auf halbe aufrunden
+    assert sc("600 g", 0.75) == "450 g"
+    assert sc("37 g", 1.5) == "55 g"       # 55,5 -> auf 5 g gerundet
+    assert sc("zum Garnieren", 2) == "zum Garnieren"
+    assert sc("4, à ca. 200 g", 1.5) == "6, à ca. 200 g"
+    f = ing.servings_factor
+    assert f(6, {"recipe_servings": 4}) == 1.5
+    assert f(4, {"recipe_servings": 0, "recipe_yield_quantity": 2}) == 2
+    assert f(4, {}) == 1.0 and f(None, {"recipe_servings": 4}) == 1.0
+    line = ing.ingredient_line({"quantity": 500, "unit": {"name": "g"}, "food": {"name": "Spaghetti"}}, 1.5)
+    assert line == {"name": "Spaghetti", "spec": "750 g"}, line
+
+
 def test_norm():
     assert ing.norm("  Schnittlauch ") == ing.norm("schnittlauch")
 

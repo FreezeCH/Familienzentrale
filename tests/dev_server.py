@@ -116,7 +116,7 @@ class FakeMealie:
             return {"quantity": q, "unit": {"name": unit, "abbreviation": unit, "use_abbreviation": True} if unit else None,
                     "food": {"name": food} if food else None, "note": note, "display": f"{q or ''} {unit or ''} {food or note}".strip(), "original_text": None}
         self.recipes = {
-            "r-bolo": {"recipe_id": "r-bolo", "slug": "spaghetti-bolognese", "name": "Spaghetti Bolognese", "image": "x",
+            "r-bolo": {"recipe_id": "r-bolo", "slug": "spaghetti-bolognese", "name": "Spaghetti Bolognese", "image": "x", "recipe_servings": 4,
                        "ingredients": [ing(500, "g", "Spaghetti"), ing(400, "g", "Hackfleisch"), ing(1, None, "Zwiebel"), ing(None, None, None, "Salz und Pfeffer")]},
             "r-curry": {"recipe_id": "r-curry", "slug": "gemuesecurry", "name": "Gemüsecurry", "image": None,
                         "ingredients": [ing(1, "Dose", "Kokosmilch"), ing(2, None, "Zwiebel"), ing(250, "g", "Reis")]},
