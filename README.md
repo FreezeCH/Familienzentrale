@@ -50,6 +50,14 @@ In Entwicklung (Version 0.5.3).
 - **Mealie:** die offizielle Integration [Mealie](https://www.home-assistant.io/integrations/mealie/)
 - **Bring:** die offizielle Integration [Bring!](https://www.home-assistant.io/integrations/bring/)
 
+## Benachrichtigungen
+
+Unter ⚙️ Einstellungen → Benachrichtigungen:
+- **Empfänger:** Handy-App-Geräte (iPhone/iPad) und Benachrichtigungs-Entitäten wie Telegram. Jeder wird einzeln angeschrieben; fällt einer aus, bekommen die anderen ihre Nachricht trotzdem.
+- **Lautsprecher:** Ansagen (z. B. Sonos) als Durchsage, Musik läuft danach weiter. Keine Ansagen in der Ruhezeit.
+- **Wann:** Kind hat etwas erledigt oder will eine Belohnung einlösen (im iPhone mit Knöpfen „Bestätigen“/„Ablehnen“), Müll am Vorabend, Wartung fällig.
+- **Testnachricht** zeigt pro Empfänger, ob Home Assistant die Nachricht angenommen hat.
+
 ## Dashboard-Karten
 
 Die Integration lädt zwei Karten selbst. Eine Dashboard-Ressource ist nicht nötig.
@@ -79,6 +87,7 @@ Fotos: In HA einen Netzwerkspeicher mit Verwendung „Medien“ einbinden (oder 
 ## Tests
 - `python tests/test_logic.py`: Fachlogik (Fälligkeit, Routinen, Punkte, Müll, Datenübernahme)
 - `python tests/test_ingredients.py`: Zerlegung von Zutaten in Name und Menge
+- `python tests/test_notifier.py`: Ruhezeit und Ansage-Adresse der Benachrichtigungen
 - `python tests/test_rrule.py`: Wiederholungsregeln je Kalendertyp (lokal, CalDAV)
 - `tests/wand.html`: Nachbau eines Wand-Dashboards (1024 × 768) mit beiden Karten
 - `python tests/test_caldav_edit.py`: Bearbeiten/Löschen in CalDAV-Serien mit echter icalendar-Bibliothek (`pip install icalendar`, sonst übersprungen)

@@ -24,6 +24,7 @@ from .mealie import MealieBridge
 from .rrule import for_platform as rrule_for_platform
 from . import caldav_edit
 from . import photos
+from . import notifier
 from .const import (
     CAL_DAYS_AHEAD,
     CAL_DAYS_BACK,
@@ -67,12 +68,21 @@ DEFAULT_DATA: dict[str, Any] = {
             "media": "",
         },
         "notify": {
-            "telegram": "",
-            "sonos": [],
-            "quiet_from": "21:00",
+            "targets": [],  # Empfänger für Push/Telegram (notify.mobile_app_xyz oder notify.xyz)
+            "sonos": [],  # Lautsprecher für Ansagen
+            "tts": "",  # Sprachausgabe (leer = erste vorhandene)
+            "language": "de",
+            "volume": 0.35,
+            "quiet_from": "21:00",  # keine Ansagen in dieser Zeit
             "quiet_to": "07:00",
             "waste_time": "19:00",
-            "waste_targets": ["telegram", "sonos"],
+            "maint_time": "08:00",
+            "link": "/familienzentrale",
+            "events": {
+                "approval": {"push": True, "sonos": False},
+                "waste": {"push": True, "sonos": True},
+                "maintenance": {"push": True, "sonos": False},
+            },
         },
         "mealie": {"to_bring": "button", "bring_list": "", "slots": ["fruehstueck", "mittag", "abend"], "skip": ["Salz", "Pfeffer", "Salz, Pfeffer", "Wasser"], "servings": 4},
         "pin": None,  # {"salt": ..., "hash": ...}
@@ -83,6 +93,7 @@ DEFAULT_DATA: dict[str, Any] = {
     "rewards": [],
     "ledger": [],
     "pending": [],
+    "notify_log": {},
     "history": [],
     "maintenance": [],
     "waste": [],
@@ -95,7 +106,7 @@ DEFAULT_DATA: dict[str, Any] = {
 }
 
 # Aktionen, die nur mit gültiger Entsperrung (Eltern-PIN) erlaubt sind
-PROTECTED = {"approve", "reject", "adjust_points", "save_item", "delete_item"}
+PROTECTED = {"approve", "reject", "adjust_points", "save_item", "delete_item", "notify_test"}
 # Einstellungen, die jede Person ohne PIN ändern darf
 FREE_SETTINGS = {"theme"}
 
@@ -149,6 +160,16 @@ class FamilienzentraleHub:
                 else:
                     settings[key] = val
             data["settings"] = settings
+            n = settings["notify"]
+            old_tg = n.pop("telegram", None)
+            n.pop("waste_targets", None)
+            if old_tg and old_tg not in n.get("targets", []):
+                n.setdefault("targets", []).append(old_tg)
+            ev = copy.deepcopy(DEFAULT_DATA["settings"]["notify"]["events"])
+            for k, v in (n.get("events") or {}).items():
+                if isinstance(v, dict) and k in ev:
+                    ev[k].update(v)
+            n["events"] = ev
             self.data = data
             if logic.migrate(self.data):
                 _LOGGER.info("Routinen und Aufgaben ins neue Format übernommen")
@@ -278,6 +299,10 @@ class FamilienzentraleHub:
         st["ha_persons"] = self._entities_of("person")
         st["recipes"] = []
         st["version"] = VERSION
+        st["notify_targets"] = notifier.targets(self.hass)
+        st["speakers"] = [x for x in self._entities_of("media_player") if x.get("platform") in ("sonos", None)] or self._entities_of("media_player")
+        st["tts_list"] = self._entities_of("tts")
+        st.pop("notify_log", None)
         st["mealie"] = {"ok": False, "error": None}
         if self.mealie.available:
             ws = self.today() - timedelta(days=self.today().weekday())
@@ -569,6 +594,7 @@ class FamilienzentraleHub:
         today = self.today()
         t = today.isoformat()
         result: dict[str, Any] = {}
+        pending_before = {x.get("id") for x in d["pending"]}
 
         if action == "check_pin":
             ok = await self.async_check_pin(str(data.get("pin", "")))
@@ -801,11 +827,113 @@ class FamilienzentraleHub:
         elif action == "frame_photo":
             return await self._async_frame_photo(int(data.get("index") or 0))
 
+        elif action == "notify_test":
+            return await self._async_notify_test()
+
         else:
             raise HomeAssistantError(f"Unbekannte Aktion: {action}")
 
+        new_pending = [x for x in d["pending"] if x.get("id") not in pending_before]
+        if new_pending:
+            self.hass.async_create_task(self._async_notify_pending(new_pending))
         self._changed()
         return result
+
+    # ---------- Benachrichtigungen ----------
+    def _nset(self) -> dict[str, Any]:
+        return self.data["settings"]["notify"]
+
+    def _quiet(self) -> bool:
+        n = self._nset()
+        return notifier.in_quiet(dt_util.now().strftime("%H:%M"), n.get("quiet_from"), n.get("quiet_to"))
+
+    async def _async_send(self, event: str, title: str, message: str, speech: str | None = None,
+                          actions: list[dict[str, str]] | None = None) -> list[dict[str, Any]]:
+        n = self._nset()
+        ev = (n.get("events") or {}).get(event, {})
+        out: list[dict[str, Any]] = []
+        if ev.get("push") and n.get("targets"):
+            out += await notifier.send(self.hass, n["targets"], title, message, n.get("link") or None, actions)
+        if ev.get("sonos") and n.get("sonos") and not self._quiet():
+            out += await notifier.speak(self.hass, n["sonos"], n.get("tts"), speech or message, n.get("language"), n.get("volume"))
+        return out
+
+    def _pending_text(self, pe: dict) -> str:
+        p = self._find("persons", pe.get("person")) or {}
+        who = p.get("name") or "Jemand"
+        if pe.get("kind") == "belohnung":
+            return f"🎁 {who} möchte „{pe.get('name')}“ einlösen ({abs(int(pe.get('points') or 0))} ⭐)."
+        pts = int(pe.get("points") or 0)
+        return f"✅ {who} hat „{pe.get('name')}“ erledigt" + (f" (+{pts} ⭐)" if pts else "") + "."
+
+    async def _async_notify_pending(self, items: list[dict]) -> None:
+        for pe in items:
+            actions = [{"action": notifier.ACTION_OK + str(pe["id"]), "title": "✅ Bestätigen"},
+                       {"action": notifier.ACTION_NO + str(pe["id"]), "title": "✖️ Ablehnen", "destructive": "true"}]
+            try:
+                await self._async_send("approval", "🔔 Bitte bestätigen", self._pending_text(pe), actions=actions)
+            except Exception:  # noqa: BLE001 - Benachrichtigung darf nie die Aktion stören
+                _LOGGER.exception("Benachrichtigung „bitte bestätigen“ fehlgeschlagen")
+
+    async def async_phone_action(self, action: str) -> None:
+        """Knopf „Bestätigen“/„Ablehnen“ in der Handy-Nachricht."""
+        if action.startswith(notifier.ACTION_OK):
+            act, pid = "approve", action[len(notifier.ACTION_OK):]
+        elif action.startswith(notifier.ACTION_NO):
+            act, pid = "reject", action[len(notifier.ACTION_NO):]
+        else:
+            return
+        if not any(x.get("id") == pid for x in self.data["pending"]):
+            return  # schon erledigt (z. B. am Wand-iPad)
+        # Die Nachricht ging nur an die eingestellten Eltern-Geräte; daher hier ohne PIN
+        await self.async_action(act, {"id": pid, "_pin": self._new_token()})
+
+    async def _async_notify_test(self) -> dict[str, Any]:
+        n = self._nset()
+        out = []
+        if n.get("targets"):
+            out += await notifier.send(self.hass, n["targets"], "Familienzentrale", "🔔 Testnachricht – das klappt!", n.get("link") or None)
+        if n.get("sonos"):
+            out += await notifier.speak(self.hass, n["sonos"], n.get("tts"), "Hallo, das ist eine Testansage der Familienzentrale.", n.get("language"), n.get("volume"))
+        if not out:
+            raise HomeAssistantError("Noch keine Empfänger oder Lautsprecher ausgewählt")
+        return {"results": out}
+
+    def _once(self, key: str, days: int = 1) -> bool:
+        """True, wenn diese Erinnerung in den letzten `days` Tagen noch nicht kam (und merkt sie sich)."""
+        log = self.data.setdefault("notify_log", {})
+        today = self.today()
+        last = log.get(key)
+        if last and (today - date.fromisoformat(last)).days < days:
+            return False
+        log[key] = today.isoformat()
+        cutoff = (today - timedelta(days=40)).isoformat()
+        for k in [k for k, v in log.items() if v < cutoff]:
+            log.pop(k, None)
+        self._save()
+        return True
+
+    async def async_tick_minute(self) -> None:
+        """Jede Minute: geplante Erinnerungen (Müll am Vorabend, Wartung)."""
+        n = self._nset()
+        hm = dt_util.now().strftime("%H:%M")
+        today = self.today()
+        try:
+            if hm == (n.get("waste_time") or "19:00") and self.data["settings"]["modules"].get("muell") is not False:
+                tomorrow = today + timedelta(days=1)
+                names = [w.get("name") for w in self.data.get("waste", []) if logic.waste_dates(w, 1, tomorrow)[:1] == [tomorrow]]
+                if names and self._once("waste:" + tomorrow.isoformat()):
+                    txt = ", ".join(str(x) for x in names)
+                    await self._async_send("waste", "🗑️ Morgen Abfuhr", f"Morgen wird abgeholt: {txt}. Bitte heute bereitstellen.",
+                                           speech=f"Erinnerung: Morgen wird abgeholt: {txt}. Bitte heute Abend bereitstellen.")
+            if hm == (n.get("maint_time") or "08:00") and self.data["settings"]["modules"].get("wartung") is not False:
+                due = [m for m in self.data.get("maintenance", []) if logic.maint_status(m, today) != "ok" and m.get("next") and m["next"] <= today.isoformat()]
+                due = [m for m in due if self._once("maint:" + str(m.get("id")), 7)]
+                if due:
+                    txt = ", ".join(str(m.get("name")) for m in due)
+                    await self._async_send("maintenance", "🔧 Wartung fällig", f"Fällig: {txt}.", speech=f"Wartung fällig: {txt}.")
+        except Exception:  # noqa: BLE001
+            _LOGGER.exception("Geplante Erinnerung fehlgeschlagen")
 
     # ---------- Bilderrahmen ----------
     async def _async_frame_photo(self, index: int) -> dict[str, Any]:

@@ -8,7 +8,7 @@
  */
 (function () {
   "use strict";
-  var PANEL_VERSION = "0.7.1"; // muss zu const.py VERSION passen
+  var PANEL_VERSION = "0.8.0"; // muss zu const.py VERSION passen
 
   // ---------- Hilfsfunktionen ----------
   var pad = function (n) { return String(n).padStart(2, "0"); };
@@ -462,7 +462,7 @@
         modules: { schule: true, kalender: true, aufgaben: true, punkte: true, essen: true, einkauf: true, wartung: true, muell: true, bilderrahmen: true },
         lock_calendar: true,
         frame: { enabled: true, idle_min: 3, interval_s: 10, night_from: "22:00", night_to: "06:00", media: "media-source://media_source/local/familie" },
-        notify: { telegram: "", sonos: [], quiet_from: "21:00", quiet_to: "07:00", waste_time: "19:00", waste_targets: ["telegram", "sonos"] },
+        notify: { targets: [], sonos: [], tts: "", language: "de", volume: 0.35, quiet_from: "21:00", quiet_to: "07:00", waste_time: "19:00", maint_time: "08:00", link: "/familienzentrale", events: { approval: { push: true, sonos: false }, waste: { push: true, sonos: true }, maintenance: { push: true, sonos: false } } },
         mealie: { to_bring: "button", bring_list: "" }
       },
       persons: [
@@ -778,6 +778,8 @@ label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--mu
     }
 
     _start() {
+      var h = String(location.hash || "").slice(1);
+      if (!this._cfg && NAV_IDS.indexOf(h) >= 0) this.view = h;
       this.backend.load().then((s) => { this.state = s; this.render(); this._resetIdle(); }).catch((e) => this._error(e));
       if (this.backend.subscribe) {
         Promise.resolve(this.backend.subscribe((s) => { this.state = s; this.render(); })).then((u) => { if (this._detached) { try { u(); } catch (e) { /* egal */ } } else this._unsub = u; }).catch(() => { /* altes Backend */ });
@@ -1143,9 +1145,7 @@ label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--mu
         "<label class='row'><input type='checkbox' data-chg='setbool' data-k='lock_calendar' " + (s.lock_calendar ? "checked" : "") + "> Termine anlegen/löschen nur mit PIN</label>" +
         "<button class='btn sec' data-act='newpin'>🔑 PIN ändern</button></div></div>" +
         "<div class='card set-sec'><h3>🍽️ Mealie & Bring</h3><div class='form'><label class='f'>Zutaten an Bring<select data-chg='mealie' data-k='to_bring'>" + [["auto", "automatisch beim Eintragen"], ["button", "auf Knopfdruck (mit Auswahl)"], ["never", "nie"]].map((o) => "<option value='" + o[0] + "'" + (s.mealie.to_bring === o[0] ? " selected" : "") + ">" + o[1] + "</option>").join("") + "</select></label><label class='f'>Einkaufsliste für Zutaten und Einkauf<select data-chg='mealie' data-k='bring_list'><option value=''>– bitte wählen –</option>" + this._todoLists().map((o) => "<option value='" + esc(o.entity_id) + "'" + (s.mealie.bring_list === o.entity_id ? " selected" : "") + ">" + esc(o.name) + (o.platform === "bring" ? " · Bring" : "") + "</option>").join("") + "</select></label><label class='f'>Standard: für wie viele Personen wird gekocht<input type='number' min='1' max='30' data-chg='servings' value='" + esc(this._defServings()) + "'></label><label class='f'>Grundzutaten, die nie vorausgewählt sind (kommagetrennt)<input data-chg='skiplist' value='" + esc(((s.mealie || {}).skip || []).join(", ")) + "'></label><div class='f'><span class='small muted'><b>Zeilen im Essensplan</b></span><div class='grid' style='grid-template-columns:repeat(auto-fill,minmax(130px,1fr))'>" + ALL_SLOTS.map((x) => "<label class='row'><input type='checkbox' data-chg='slot' data-v='" + x[0] + "'" + (slotsOf(st).some((y) => y[0] === x[0]) ? " checked" : "") + ">" + x[1] + "</label>").join("") + "</div></div></div></div>" +
-        "<div class='card set-sec'><h3>🔔 Benachrichtigungen</h3><div class='form'><label class='f'>Telegram (Notify-Aktion)<input data-chg='notify' data-k='telegram' placeholder='notify.telegram_familie' value='" + esc(s.notify.telegram) + "'></label><label class='f'>Sonos-Lautsprecher (kommagetrennt)<input data-chg='notifylist' data-k='sonos' placeholder='media_player.sonos_kuche' value='" + esc((s.notify.sonos || []).join(", ")) + "'></label>" +
-        "<div class='row'><label class='f' style='flex:1'>Ruhezeit von<input type='time' data-chg='notify' data-k='quiet_from' value='" + esc(s.notify.quiet_from) + "'></label><label class='f' style='flex:1'>bis<input type='time' data-chg='notify' data-k='quiet_to' value='" + esc(s.notify.quiet_to) + "'></label></div>" +
-        "<label class='f'>Müll-Erinnerung am Vorabend um<input type='time' data-chg='notify' data-k='waste_time' value='" + esc(s.notify.waste_time) + "'></label></div></div>" +
+        this._notifySettings(st, s) +
         "<div class='card set-sec'><h3>🖼️ Bilderrahmen</h3><div class='form'><label class='f'>Medienordner (Name unter HA-Medien, z. B. Bilder)<input data-chg='frame' data-k='media' placeholder='Bilder' value='" + esc(s.frame.media) + "'></label>" +
         "<div class='row'><label class='f' style='flex:1'>Start nach (Minuten)<input type='number' min='1' data-chg='framenum' data-k='idle_min' value='" + esc(s.frame.idle_min) + "'></label><label class='f' style='flex:1'>Bildwechsel (Sekunden)<input type='number' min='3' data-chg='framenum' data-k='interval_s' value='" + esc(s.frame.interval_s) + "'></label></div>" +
         "<div class='row'><label class='f' style='flex:1'>Nachtruhe von<input type='time' data-chg='frame' data-k='night_from' value='" + esc(s.frame.night_from) + "'></label><label class='f' style='flex:1'>bis<input type='time' data-chg='frame' data-k='night_to' value='" + esc(s.frame.night_to) + "'></label></div>" +
@@ -1163,6 +1163,7 @@ label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--mu
         case "nav": if (this._navOut) { this._navOut(v); break; } this.view = v; this.render(); break;
         case "back": navigateTo((this._cfg || {}).zurueck || "/"); break;
         case "reload": location.reload(); break;
+        case "notifytest": this.pin(() => this._notifyTest()); break;
         case "hamenu": this.dispatchEvent(new CustomEvent("hass-toggle-menu", { bubbles: true, composed: true })); break;
         case "calmode": this.sub.cal = v; this.render(); break;
         case "calnav": {
@@ -1213,6 +1214,33 @@ label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--mu
         var i2 = this.shadowRoot.getElementById("shopin"); if (i2) i2.focus();
       });
     }
+    _notifySettings(st, s) {
+      var n = s.notify || {}, ev = n.events || {};
+      var box = (key, list) => (list.length ? list.map((o) => "<label class='row'><input type='checkbox' data-chg='nlist' data-k='" + key + "' data-v='" + esc(o.id || o.entity_id) + "'" + ((n[key] || []).indexOf(o.id || o.entity_id) >= 0 ? " checked" : "") + "> " + esc(o.name) + "</label>").join("") : "<div class='small muted'>Nichts gefunden</div>");
+      var evRow = (k, label) => { var e = ev[k] || {}; return "<tr><td>" + label + "</td><td style='text-align:center'><input type='checkbox' data-chg='nev' data-e='" + k + "' data-k='push'" + (e.push ? " checked" : "") + "></td><td style='text-align:center'><input type='checkbox' data-chg='nev' data-e='" + k + "' data-k='sonos'" + (e.sonos ? " checked" : "") + "></td></tr>"; };
+      return "<div class='card set-sec'><h3>🔔 Benachrichtigungen</h3><div class='form'>" +
+        "<div class='f'><span class='small muted'><b>Push und Telegram an</b> (Eltern)</span>" + box("targets", st.notify_targets || []) + "</div>" +
+        "<div class='f'><span class='small muted'><b>Ansagen auf Lautsprechern</b></span>" + box("sonos", st.speakers || []) + "</div>" +
+        "<div class='row'><label class='f' style='flex:2'>Stimme<select data-chg='notify' data-k='tts'><option value=''>automatisch</option>" + (st.tts_list || []).map((o) => "<option value='" + esc(o.entity_id) + "'" + (n.tts === o.entity_id ? " selected" : "") + ">" + esc(o.name) + "</option>").join("") + "</select></label>" +
+        "<label class='f' style='flex:1'>Lautstärke %<input type='number' min='5' max='100' step='5' data-chg='nvol' value='" + Math.round((Number(n.volume) || 0.35) * 100) + "'></label></div>" +
+        "<div class='row'><label class='f' style='flex:1'>Keine Ansagen von<input type='time' data-chg='notify' data-k='quiet_from' value='" + esc(n.quiet_from) + "'></label><label class='f' style='flex:1'>bis<input type='time' data-chg='notify' data-k='quiet_to' value='" + esc(n.quiet_to) + "'></label></div>" +
+        "<table class='small' style='width:100%;border-collapse:collapse'><tr><th style='text-align:left'>Wann</th><th>📱 Push</th><th>🔊 Ansage</th></tr>" +
+        evRow("approval", "Kind hat etwas erledigt / will einlösen (mit Knopf „Bestätigen“ im iPhone)") +
+        evRow("waste", "Müll am Vorabend") + evRow("maintenance", "Wartung fällig") + "</table>" +
+        "<div class='row'><label class='f' style='flex:1'>Müll-Erinnerung um<input type='time' data-chg='notify' data-k='waste_time' value='" + esc(n.waste_time) + "'></label><label class='f' style='flex:1'>Wartung um<input type='time' data-chg='notify' data-k='maint_time' value='" + esc(n.maint_time) + "'></label></div>" +
+        "<label class='f'>Link beim Antippen der Nachricht<input data-chg='notify' data-k='link' placeholder='/familienzentrale' value='" + esc(n.link) + "'></label>" +
+        "<button class='btn sec' data-act='notifytest'>📨 Testnachricht senden</button></div></div>";
+    }
+    _notifyTest() {
+      var names = {};
+      (this.state.notify_targets || []).forEach((o) => { names[o.id] = o.name; });
+      (this.state.speakers || []).forEach((o) => { names[o.entity_id] = "🔊 " + o.name; });
+      this.toast("Wird gesendet …");
+      this.act("notify_test", {}).then((r) => {
+        var rows = ((r && r.results) || []).map((x) => "<div class='row'>" + (x.ok ? "✅" : "⚠️") + " <b>" + esc(names[x.id] || x.id) + "</b>" + (x.ok ? "" : " <span class='small muted'>" + esc(x.error || "") + "</span>") + "</div>").join("");
+        this.dialog("📨 Testnachricht", "<p class='small muted'>„✅“ heisst: Home Assistant hat die Nachricht angenommen. Ob sie ankommt, siehst du am Gerät.</p>" + rows, [["OK", ""]]);
+      }).catch(() => { /* Meldung kommt aus act */ });
+    }
     _onChange(e) {
       var el = e.target, c = el.getAttribute("data-chg");
       if (!c) return;
@@ -1225,6 +1253,9 @@ label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--mu
         case "setbool": save(k, el.checked); break;
         case "mealie": save("mealie", Object.assign({}, s.mealie, { [k]: el.value })); break;
         case "notify": save("notify", Object.assign({}, s.notify, { [k]: el.value })); break;
+        case "nlist": { var lst = (s.notify[k] || []).filter((x) => x !== el.getAttribute("data-v")); if (el.checked) lst.push(el.getAttribute("data-v")); save("notify", Object.assign({}, s.notify, { [k]: lst })); break; }
+        case "nev": { var evs = JSON.parse(JSON.stringify(s.notify.events || {})); var en = el.getAttribute("data-e"); evs[en] = Object.assign({}, evs[en] || {}, { [k]: el.checked }); save("notify", Object.assign({}, s.notify, { events: evs })); break; }
+        case "nvol": save("notify", Object.assign({}, s.notify, { volume: Math.max(5, Math.min(100, Number(el.value) || 35)) / 100 })); break;
         case "servings": save("mealie", Object.assign({}, s.mealie, { servings: Math.max(1, Math.min(30, Number(el.value) || 4)) })); break;
         case "skiplist": save("mealie", Object.assign({}, s.mealie, { skip: el.value.split(",").map((x) => x.trim()).filter(Boolean) })); break;
         case "slot": { var on = slotsOf(this.state).map((x) => x[0]).filter((x) => x !== el.getAttribute("data-v")); if (el.checked) on.push(el.getAttribute("data-v")); on = ALL_SLOTS.map((x) => x[0]).filter((x) => on.indexOf(x) >= 0); if (!on.length) { el.checked = true; break; } save("mealie", Object.assign({}, s.mealie, { slots: on })); break; }

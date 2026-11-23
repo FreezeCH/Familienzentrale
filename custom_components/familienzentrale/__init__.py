@@ -73,6 +73,23 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hub.invalidate_events()
         hub.async_notify()
 
+    # Benachrichtigungen: geplante Erinnerungen jede Minute prüfen
+    async def _minute(now) -> None:
+        await hub.async_tick_minute()
+
+    entry.async_on_unload(async_track_time_change(hass, _minute, second=20))
+
+    # Knöpfe „Bestätigen“/„Ablehnen“ in der Handy-Nachricht
+    async def _phone_action(event: Event) -> None:
+        action = str(event.data.get("action") or "")
+        if action.startswith(("FZ_OK_", "FZ_NO_")):
+            try:
+                await hub.async_phone_action(action)
+            except Exception:  # noqa: BLE001
+                _LOGGER.exception("Knopf in der Handy-Nachricht konnte nicht ausgeführt werden")
+
+    entry.async_on_unload(hass.bus.async_listen("mobile_app_notification_action", _phone_action))
+
     # Kurz nach Mitternacht: neue Tagesaufgaben; alle 5 Minuten: Termine auffrischen
     entry.async_on_unload(async_track_time_change(hass, _tick, hour=0, minute=0, second=5))
     entry.async_on_unload(async_track_time_interval(hass, _tick, timedelta(minutes=5)))

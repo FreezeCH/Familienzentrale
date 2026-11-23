@@ -400,10 +400,20 @@ class Services:
     def has_service(self, domain, service):
         return domain != "mealie" or bool(self.hass.config_entries.entries.get("mealie"))
 
+    def async_services(self):
+        # zwei iPhones: das der Mutter ist (wie in echt manchmal) nicht erreichbar
+        return {"notify": {"send_message": None, "mobile_app_iphone_vater": None, "mobile_app_iphone_mutter": None}}
+
     async def async_call(self, domain, service, data=None, target=None, blocking=False, return_response=False):
         data = data or {}
         eid = (target or {}).get("entity_id")
         self.calls.append({"service": f"{domain}.{service}", "data": data, "target": eid})
+        if domain == "notify":
+            if service == "mobile_app_iphone_mutter":
+                raise HomeAssistantError("Gerät nicht erreichbar")
+            return None
+        if (domain, service) == ("media_player", "play_media"):
+            return None
         if domain == "mealie":
             if data.get("config_entry_id") != "mealie1":
                 raise HomeAssistantError("config_entry_id fehlt oder falsch")
@@ -449,6 +459,9 @@ class FakeHass:
     async def async_add_executor_job(self, func, *args):
         return func(*args)
 
+    def async_create_task(self, coro):
+        return asyncio.ensure_future(coro)
+
 
 def make_media() -> Path:
     """Beispielfotos für den Bilderrahmen (werden einmal erzeugt, nicht im Repository)."""
@@ -485,6 +498,11 @@ def build():
     hass.data["calendar"].entities["calendar.icloud"] = icloud
     hass.states.add("calendar.icloud", "iCloud", 1)
     hass.platforms["calendar.icloud"] = "caldav"
+    # Benachrichtigungen: Telegram, Sonos, Sprachausgabe
+    for eid, name, plat in (("notify.telegram_familie", "Telegram Familie", "telegram_bot"), ("notify.iphone_vater", "iPhone Vater", "mobile_app"),
+                            ("media_player.kuche", "Küche", "sonos"), ("tts.google_de", "Google Übersetzer", "google_translate")):
+        hass.states.add(eid, name)
+        hass.platforms[eid] = plat
     bring = FakeTodo()
     for x in ("Milch", "Brot"):
         bring.add(x)
